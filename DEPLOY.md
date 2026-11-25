@@ -61,11 +61,11 @@ npm run deploy
 
 Workflow `.github/workflows/ci.yml` на каждый push в `main` сначала выполняет `npm ci`, `npm run build`, `npm test`, `npm run smoke`, а затем деплоит Worker. Если секреты не заданы, задача `deploy` не падает, а пропускается с предупреждением — проверки при этом остаются зелёными.
 
-Добавь два repository secret:
+Добавь один repository secret:
 
 1. GitHub → репозиторий `lost-internet-web` → **Settings → Secrets and variables → Actions → New repository secret**.
-2. `CLOUDFLARE_API_TOKEN` — API token с правами **Edit** на **Workers Scripts** и **D1** для аккаунта Cloudflare.
-3. `CLOUDFLARE_ACCOUNT_ID` — ID аккаунта из Cloudflare Dashboard (правый сайдбар → **Account ID**).
+2. `CLOUDFLARE_API_TOKEN` — API token с правами **Edit** на **Workers Scripts** и **D1** для аккаунта Cloudflare. Если секрет уже создан как `LOST_INTERNET_CL`, переименовывать не обязательно: workflow принимает и это имя.
+3. Account ID записан в `wrangler.jsonc` (`bdf7de56ab499f657fbe798c44d4ce0f`), поэтому отдельный `CLOUDFLARE_ACCOUNT_ID` не требуется.
 4. После сохранения сделай `git push` или нажми **Run workflow** во вкладке Actions — задача `deploy` перестанет пропускаться.
 
 Проверить токен локально можно так:

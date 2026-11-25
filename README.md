@@ -53,7 +53,7 @@ npm run smoke # проверка живого сайта, ассетов, PWA и
 npm run verify # build + test + smoke
 ```
 
-GitHub Actions на push в `main` выполняет те же проверки и деплоит Worker. Для автодеплоя нужны repository secrets `CLOUDFLARE_API_TOKEN` и `CLOUDFLARE_ACCOUNT_ID`; без них deploy пропускается, а не помечается как failed. Инструкция — `DEPLOY.md`.
+GitHub Actions на push в `main` выполняет те же проверки и деплоит Worker. Для автодеплоя нужен repository secret с API-токеном Cloudflare: `CLOUDFLARE_API_TOKEN` (поддерживается и имя `LOST_INTERNET_CL`). Account ID задан в `wrangler.jsonc`, отдельный секрет не нужен. Без токена deploy пропускается, а не помечается как failed. Инструкция — `DEPLOY.md`.
 
 ## Доступ для других
 

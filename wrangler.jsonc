@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "lost-internet-web",
+  "account_id": "bdf7de56ab499f657fbe798c44d4ce0f",
   "main": "src/worker.ts",
   "compatibility_date": "2026-11-23",
   "workers_dev": true,
