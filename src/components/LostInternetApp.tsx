@@ -122,6 +122,7 @@ const MENUS: Array<{ id: MenuKind; label: string }> = [
   { id: 'help', label: 'Help' },
 ]
 const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320, help: 380 }
+const POPUP_HEIGHT: Record<PopupKind, number> = { ie: 150, favorites: 180, about: 200, help: 360 }
 const POPUP_TITLE: Record<PopupKind, string> = {
   ie: 'Internet Explorer',
   favorites: '★ Favorites',
@@ -266,33 +267,42 @@ async function parseWavInfo(file: File): Promise<{ sampleRate: number; bitrate: 
   return { sampleRate: 0, bitrate: 0 }
 }
 
-function renderArt(canvas: HTMLCanvasElement, artUrl: string | undefined, label: string, glitch: boolean) {
+function renderArt(canvas: HTMLCanvasElement, artUrl: string | undefined, label: string, glitch: boolean, theme: 'dark' | 'light') {
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) return
   const w = canvas.width = 430
   const h = canvas.height = 430
-  ctx.fillStyle = '#111111'
+  const light = theme === 'light'
+  const palette = {
+    bg: light ? '#D6D6D6' : '#111111',
+    grid: light ? '#A5A5A5' : '#252525',
+    frame: '#142B83',
+    label: light ? '#050505' : '#A5A5A5',
+    sub: light ? '#050505' : '#D6D6D6',
+    muted: '#555555',
+  }
+  ctx.fillStyle = palette.bg
   ctx.fillRect(0, 0, w, h)
-  ctx.strokeStyle = '#252525'
+  ctx.strokeStyle = palette.grid
   ctx.lineWidth = 1
   for (let x = 0; x < w; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke() }
   for (let y = 0; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
   const decor = () => {
-    ctx.strokeStyle = '#142b83'
+    ctx.strokeStyle = palette.frame
     ctx.strokeRect(18, 18, 393, 393)
     ctx.beginPath()
     ctx.moveTo(18, 215); ctx.lineTo(411, 215)
     ctx.moveTo(215, 18); ctx.lineTo(215, 411)
     ctx.stroke()
-    ctx.fillStyle = '#a5a5a5'
+    ctx.fillStyle = palette.label
     ctx.font = 'bold 27px Courier New'
     ctx.textAlign = 'center'
     ctx.fillText(label, 215, 201)
     ctx.font = '12px Courier New'
-    ctx.fillStyle = '#d6d6d6'
+    ctx.fillStyle = palette.sub
     ctx.fillText('LOSE.EXE // NO SIGNAL', 215, 225)
     ctx.font = '11px Courier New'
-    ctx.fillStyle = '#555555'
+    ctx.fillStyle = palette.muted
     ctx.fillText('lost://archive/index.htm', 215, 246)
     ctx.textAlign = 'left'
     ctx.fillText('+' + String(Math.floor(Date.now() / 1000) % 10000).padStart(4, '0'), 30, 404)
@@ -318,10 +328,11 @@ function renderArt(canvas: HTMLCanvasElement, artUrl: string | undefined, label:
       const v = clamp(gray + noise, 0, 255)
       data.data[i] = v; data.data[i + 1] = v; data.data[i + 2] = v
     }
+    const shade = light ? 0.92 : 0.82
     for (let y = 0; y < h; y += 4) {
       for (let x = 0; x < w; x++) {
         const i = (y * w + x) * 4
-        data.data[i] *= 0.82; data.data[i + 1] *= 0.82; data.data[i + 2] *= 0.82
+        data.data[i] *= shade; data.data[i + 1] *= shade; data.data[i + 2] *= shade
       }
     }
     ctx.putImageData(data, 0, 0)
@@ -339,6 +350,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>('p1')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<{ field: SortField; dir: 'asc' | 'desc' }>({ field: 'addedAt', dir: 'desc' })
+  const [playlistSort, setPlaylistSort] = useState<{ field: SortField; dir: 'asc' | 'desc' } | null>(null)
+  const [pendingLikes, setPendingLikes] = useState<string[]>([])
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [playing, setPlaying] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -386,6 +399,10 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const popupsSeededRef = useRef(false)
   const zRef = useRef(20)
   const nextRef = useRef<(fromAuto?: boolean) => void>(() => {})
+  const playTokenRef = useRef(0)
+  const busyRef = useRef(false)
+  const likedPendingRef = useRef<Set<string>>(new Set())
+  const storageWarnedRef = useRef(false)
   const tracksRef = useRef(tracks)
   const currentIdRef = useRef(currentId)
   const settingsRef = useRef(settings)
@@ -396,30 +413,31 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   settingsRef.current = settings
 
   const current = useMemo(() => tracks.find(t => t.id === currentId) ?? null, [tracks, currentId])
+  function sortTracks(list: Track[], order: { field: SortField; dir: 'asc' | 'desc' }) {
+    const dir = order.dir === 'asc' ? 1 : -1
+    return [...list].sort((a, b) => {
+      if (['duration', 'plays', 'addedAt', 'lastPlayed'].includes(order.field)) {
+        return (Number(a[order.field] ?? 0) - Number(b[order.field] ?? 0)) * dir
+      }
+      return String(a[order.field] ?? '').localeCompare(String(b[order.field] ?? '')) * dir
+    })
+  }
   const visibleTracks = useMemo(() => {
     const q = query.trim().toLowerCase()
     let list = tracks
     if (section === 'favorites') list = tracks.filter(t => t.favorite)
     if (section === 'unknown') list = tracks.filter(t => !t.artist || t.artist === 'unknown artist')
-    if (section === 'archive') list = [...tracks].sort((a, b) => b.addedAt - a.addedAt)
-    if (section === 'recent') list = tracks.filter(t => t.lastPlayed > 0).sort((a, b) => b.lastPlayed - a.lastPlayed)
     if (section === 'playlist' && selectedPlaylistId) {
-      const ids = new Set(playlists.find(p => p.id === selectedPlaylistId)?.trackIds ?? [])
-      list = tracks.filter(t => ids.has(t.id))
+      const ids = playlists.find(p => p.id === selectedPlaylistId)?.trackIds ?? []
+      const byId = new Map(tracks.map(t => [t.id, t]))
+      list = ids.map(id => byId.get(id)).filter((t): t is Track => Boolean(t))
+      if (playlistSort) list = sortTracks(list, playlistSort)
     }
     if (section === 'radio') list = []
     if (q) list = list.filter(t => `${t.name} ${t.artist} ${t.album} ${t.genre}`.toLowerCase().includes(q))
-    if (section !== 'archive' && section !== 'recent') {
-      const dir = sort.dir === 'asc' ? 1 : -1
-      list = [...list].sort((a, b) => {
-        const av = String(a[sort.field] ?? '')
-        const bv = String(b[sort.field] ?? '')
-        if (['duration', 'plays', 'addedAt', 'lastPlayed'].includes(sort.field)) return (Number(a[sort.field]) - Number(b[sort.field])) * dir
-        return av.localeCompare(bv) * dir
-      })
-    }
+    if (section !== 'playlist') list = sortTracks(list, sort)
     return list
-  }, [tracks, query, section, selectedPlaylistId, playlists, sort])
+  }, [tracks, query, section, selectedPlaylistId, playlists, playlistSort, sort])
   visibleRef.current = visibleTracks
   nextRef.current = handleNext
 
@@ -488,6 +506,16 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     setStatus(message)
     setToast(message)
   }
+  function warnStorage(message = 'Archive storage unavailable. Changes are temporary.') {
+    if (storageWarnedRef.current) return
+    storageWarnedRef.current = true
+    notify(message)
+  }
+  function selectSection(id: Section) {
+    setSection(id)
+    if (id === 'archive') setSort({ field: 'addedAt', dir: 'desc' })
+    if (id === 'recent') setSort({ field: 'lastPlayed', dir: 'desc' })
+  }
   async function persistTrack(track: Track) {
     const { url: _url, artUrl: _artUrl, ...stored } = track
     void _url; void _artUrl
@@ -549,9 +577,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
 
   useEffect(() => {
     if (!ready) return
-    void dbPut(STORE_META, { key: KEY_SETTINGS, value: settings }).catch(() => {})
-    void dbPut(STORE_META, { key: KEY_PLAYLISTS, value: playlists }).catch(() => {})
-    if (currentId) void dbPut(STORE_META, { key: KEY_LAST_TRACK, value: currentId }).catch(() => {})
+    const writes = [
+      dbPut(STORE_META, { key: KEY_SETTINGS, value: settings }),
+      dbPut(STORE_META, { key: KEY_PLAYLISTS, value: playlists }),
+    ]
+    if (currentId) writes.push(dbPut(STORE_META, { key: KEY_LAST_TRACK, value: currentId }))
+    void Promise.all(writes).catch(() => warnStorage())
   }, [ready, settings, playlists, currentId])
 
   useEffect(() => {
@@ -559,6 +590,15 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     const timer = window.setTimeout(() => setToast(''), 2800)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings.theme
+    document.body.dataset.theme = settings.theme
+    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
+      'content',
+      settings.theme === 'light' ? '#D6D6D6' : '#050505',
+    )
+  }, [settings.theme])
 
   useEffect(() => {
     if (section !== 'network') return
@@ -657,7 +697,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           bitrate: t.bitrate || Math.round((t.size * 8) / (d / 1000) / 1000),
         }
         setTracks(prev => prev.map(x => x.id === updated.id ? updated : x))
-        void persistTrack(updated).catch(() => {})
+        tracksRef.current = tracksRef.current.map(x => x.id === updated.id ? updated : x)
+        void persistTrack(updated).catch(() => warnStorage('Track details could not be saved.'))
       }
     }
     const onError = (event: Event) => {
@@ -686,19 +727,31 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
-      const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || Boolean(target?.isContentEditable)
       const key = e.key.toLowerCase()
       const mod = e.ctrlKey || e.metaKey
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setOpenMenu(null)
+        setPopups([])
+        if (target && target !== document.body) target.blur()
+        return
+      }
       if (mod || e.altKey) {
         if (e.key === 'ArrowRight') { e.preventDefault(); handleNext() }
         else if (e.key === 'ArrowLeft') { e.preventDefault(); handlePrev() }
-        else if (key === 'f' && !e.altKey) { e.preventDefault(); setSection('library'); document.querySelector<HTMLInputElement>('.li-search')?.focus() }
+        else if (key === 'f' && !e.altKey) { e.preventDefault(); selectSection('library'); document.querySelector<HTMLInputElement>('.li-search')?.focus() }
         else if (key === 'o' && !e.altKey) { e.preventDefault(); fileRef.current?.click() }
         return
       }
+      const input = target as HTMLInputElement | null
+      const passiveInput = input?.tagName === 'INPUT' && ['range', 'checkbox', 'radio', 'button', 'file', 'submit', 'reset'].includes(input.type)
+      const typing = !passiveInput && (input?.tagName === 'INPUT' || input?.tagName === 'TEXTAREA' || Boolean(target?.isContentEditable))
       if (typing) return
-      if (target?.closest('button, a, select')) return
-      if (e.code === 'Space') { e.preventDefault(); togglePlay() }
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (target?.closest('button')) target.blur()
+        togglePlay()
+      }
       else if (key === 'm') setSettings(s => ({ ...s, muted: !s.muted }))
       else if (key === 'n') handleNext()
       else if (key === 'p') handlePrev()
@@ -709,7 +762,6 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       else if (key === 'h') openPopup('help')
       else if (key === 't') setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))
       else if (['1', '2', '3', '4'].includes(key)) setSettings(s => ({ ...s, vizMode: key === '1' ? 'spectrum' : key === '2' ? 'globe' : key === '3' ? 'hybrid' : 'scope' }))
-      else if (e.key === 'Escape') { setOpenMenu(null); setPopups([]) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -737,8 +789,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }, [currentId, settings.glitch, settings.calm, reducedMotion])
 
   useEffect(() => {
-    if (artRef.current) renderArt(artRef.current, current?.artUrl, current ? 'ARCHIVE IMAGE' : 'NO SIGNAL', glitchActive)
-  }, [current?.id, current?.artUrl, glitchActive])
+    if (artRef.current) renderArt(artRef.current, current?.artUrl, current ? 'ARCHIVE IMAGE' : 'NO SIGNAL', glitchActive, settings.theme)
+  }, [current?.id, current?.artUrl, glitchActive, settings.theme])
 
   useEffect(() => {
     if (!ready || popupsSeededRef.current || !settings.showPopups) return
@@ -774,7 +826,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     let gridW = 0
     let gridH = 0
     let gridTheme = ''
-    const draw = (time: number) => {
+    const staticFrame = reducedMotion || settings.calm
+    const draw = (rawTime: number) => {
+      const time = staticFrame ? 0 : rawTime
       const c = visRef.current
       if (!c || !ctx) return
       const cssW = c.clientWidth || 640
@@ -792,10 +846,15 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       const s = settingsRef.current
       const analyser = analyserRef.current
       const el = activeSlotRef.current === 'a' ? audioRef.current : nextAudioRef.current
-      const active = Boolean(analyser && el && !el.paused && !el.ended)
+      const active = !staticFrame && Boolean(analyser && el && !el.paused && !el.ended)
       const light = s.theme === 'light'
       const bg = light ? '#D6D6D6' : '#050505'
       const gridColor = light ? '#555555' : '#252525'
+      const barMain = light ? '#790D18' : '#142B83'
+      const barAccent = light ? '#142B83' : '#790D18'
+      const lineMain = light ? '#142B83' : '#A5A5A5'
+      const lineAlt = light ? '#555555' : '#A5A5A5'
+      const labelColor = light ? '#111111' : '#555555'
 
       if (!grid) {
         grid = document.createElement('canvas')
@@ -817,7 +876,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       }
       if (grid) ctx.drawImage(grid, 0, 0, w, h)
 
-      if (analyser) {
+      if (analyser && !staticFrame) {
         if (!freqData || freqData.length !== analyser.frequencyBinCount) {
           freqData = new Uint8Array(analyser.frequencyBinCount)
           waveData = new Uint8Array(analyser.fftSize)
@@ -825,34 +884,35 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         analyser.getByteFrequencyData(freqData)
         if (waveData) analyser.getByteTimeDomainData(waveData)
       }
-      const freq = freqData
-      const wave = waveData
+      const freq = staticFrame ? null : freqData
+      const wave = staticFrame ? null : waveData
       const bins = 48
       const levels = levelsRef.current
       const maxBin = freq ? freq.length - 1 : bins - 1
-      const glitching = active && !s.calm && !reducedMotion && (time % 9000) < 130
+      const glitching = active && !staticFrame && (time % 9000) < 130
       const shift = glitching ? 2 : 0
       const step = w / bins
       for (let i = 0; i < bins; i++) {
         const idx = freq ? Math.min(maxBin, Math.floor(Math.pow(i / bins, 1.7) * maxBin)) : 0
         const target = active && freq
           ? clamp((freq[idx] / 255) * s.vizSensitivity, 0, 1)
-          : 0.025 + 0.018 * (0.5 + 0.5 * Math.sin(time / 900 + i * 0.45))
-        levels[i] += (target - levels[i]) * (active ? 0.14 : 0.035)
+          : staticFrame ? 0.045 : 0.025 + 0.018 * (0.5 + 0.5 * Math.sin(time / 900 + i * 0.45))
+        if (staticFrame) levels[i] = target
+        else levels[i] += (target - levels[i]) * (active ? 0.14 : 0.035)
         if (s.vizMode !== 'globe' && s.vizMode !== 'scope') {
           const bh = 2 + levels[i] * h * 0.68
-          ctx.fillStyle = i % 9 === 0 ? '#790d18' : '#142b83'
+          ctx.fillStyle = i % 9 === 0 ? barAccent : barMain
           ctx.fillRect(i * step + 2 + shift, h - bh - 12, Math.max(2, step - 4), bh)
         }
       }
       if (s.vizMode === 'scope') {
         ctx.lineWidth = 1.6
-        for (const [color, offset, amp] of [['#142b83', 0, 1], ['#790d18', 4, 0.72]] as Array<[string, number, number]>) {
+        for (const [color, offset, amp] of [[barMain, 0, 1], [barAccent, 4, 0.72]] as Array<[string, number, number]>) {
           ctx.strokeStyle = color
           ctx.beginPath()
           for (let x = 0; x <= w; x += 2) {
             const idx = wave ? Math.min(wave.length - 1, Math.floor((x / w) * wave.length)) : 0
-            const sample = active && wave ? ((wave[idx] - 128) / 128) * amp : Math.sin(x / 34 + time / 700) * 0.03
+            const sample = active && wave ? ((wave[idx] - 128) / 128) * amp : staticFrame ? 0 : Math.sin(x / 34 + time / 700) * 0.03
             const y = h * 0.46 + offset + sample * h * 0.34
             if (x === 0) ctx.moveTo(x, y)
             else ctx.lineTo(x, y)
@@ -866,17 +926,17 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         const cy = h * 0.4
         const r = Math.min(w, h) * 0.25
         const energy = levels.reduce((sum, v) => sum + v, 0) / bins
-        ctx.strokeStyle = '#a5a5a5'
+        ctx.strokeStyle = lineMain
         ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
-        ctx.strokeStyle = '#142b83'
+        ctx.strokeStyle = barMain
         ctx.beginPath(); ctx.ellipse(cx, cy, r, Math.max(2, r * (0.28 + energy * 0.18)), 0, 0, Math.PI * 2); ctx.stroke()
         for (let i = 0; i < 6; i++) {
-          const angle = time / 2600 + i * Math.PI / 6
-          ctx.strokeStyle = i % 2 ? '#555555' : '#a5a5a5'
+          const angle = (staticFrame ? 0 : time / 2600) + i * Math.PI / 6
+          ctx.strokeStyle = i % 2 ? lineAlt : lineMain
           ctx.beginPath(); ctx.ellipse(cx, cy, Math.max(2, r * Math.abs(Math.cos(angle))), r, 0, 0, Math.PI * 2); ctx.stroke()
         }
       }
-      ctx.fillStyle = '#555555'
+      ctx.fillStyle = labelColor
       ctx.font = '10px Courier New'
       ctx.fillText(`SPECTRUM // ${bins} BANDS // ${s.vizMode.toUpperCase()}`, 12, h - 8)
       ctx.textAlign = 'right'
@@ -885,10 +945,17 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     }
     const loop = (time: number) => {
       if (!document.hidden) draw(time)
-      rafRef.current = requestAnimationFrame(loop)
+      if (!staticFrame) rafRef.current = requestAnimationFrame(loop)
+      else rafRef.current = null
     }
-    rafRef.current = requestAnimationFrame(loop)
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
+    const onResize = () => { if (staticFrame) draw(0) }
+    if (staticFrame) draw(0)
+    else rafRef.current = requestAnimationFrame(loop)
+    window.addEventListener('resize', onResize)
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      window.removeEventListener('resize', onResize)
+    }
   }, [reducedMotion, settings.calm, settings.theme, settings.vizMode, settings.vizSensitivity])
 
   useEffect(() => () => {
@@ -969,20 +1036,49 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     setSettings(s => ({ ...s, repeat: s.repeat === 'off' ? 'all' : s.repeat === 'all' ? 'one' : 'off' }))
   }
   function playTrack(id: string, allowFade = true) {
-    const t = tracks.find(x => x.id === id)
+    const t = tracksRef.current.find(x => x.id === id)
     if (!t || !t.url) { notify('Track source is unavailable.'); return }
     const active = getActiveAudio()
     const other = getOtherAudio()
     if (!active || !other) { notify('Audio output is unavailable.'); return }
+    const token = ++playTokenRef.current
     const previousId = currentIdRef.current
+    const previousSection = section
+    const previousProgress = progress
+    const previousDuration = duration
+    const previousSrc = active.src
+    const previousTime = active.currentTime
     const canFade = allowFade && settingsRef.current.crossfade && !active.paused && previousId !== id
-    const now = Date.now()
-    const updated: Track = { ...t, plays: (t.plays ?? 0) + 1, lastPlayed: now }
-    setTracks(prev => prev.map(x => x.id === id ? updated : x))
-    setCurrentId(id)
-    setSection('now')
-    setProgress(0)
-    void persistTrack(updated).catch(() => {})
+    const updated: Track = { ...t, plays: (t.plays ?? 0) + 1, lastPlayed: Date.now() }
+    const message = `Playing: ${t.artist} - ${t.name}`
+    const commit = () => {
+      if (token !== playTokenRef.current) return
+      setTracks(prev => prev.map(x => x.id === id ? updated : x))
+      tracksRef.current = tracksRef.current.map(x => x.id === id ? updated : x)
+      setCurrentId(id)
+      currentIdRef.current = id
+      setSection('now')
+      setProgress(0)
+      void persistTrack(updated)
+        .then(() => notify(message))
+        .catch(() => notify(`${message} // history not saved`))
+    }
+    const rollback = (restore?: HTMLAudioElement) => {
+      autoAdvanceRef.current = null
+      pendingIdRef.current = null
+      setCurrentId(previousId)
+      currentIdRef.current = previousId
+      setSection(previousSection)
+      setProgress(previousProgress)
+      setDuration(previousDuration)
+      if (restore && previousSrc) {
+        try {
+          restore.src = previousSrc
+          restore.currentTime = Math.min(previousTime, restore.duration || previousTime)
+        } catch { /* previous source is no longer playable */ }
+      }
+      notify('Playback blocked by browser. Click PLAY again.')
+    }
     ensureAudioContext()
     void audioCtxRef.current?.resume().catch(() => {})
 
@@ -997,25 +1093,27 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       other.currentTime = 0
       void other.play()
         .then(() => {
-          notify(`Playing: ${t.artist} - ${t.name}`)
+          if (token !== playTokenRef.current) return
+          commit()
           if (activeSlotRef.current === to) fadeSlots(from, to, fadeMs)
         })
         .catch(() => {
+          if (token !== playTokenRef.current) return
           if (activeSlotRef.current === to) {
             activeSlotRef.current = from
             stopFade()
             setSlotLevel(to, 0)
             setSlotLevel(from, 1)
             other.pause()
-            if (previousId) setCurrentId(previousId)
-            autoAdvanceRef.current = null
-            notify('Playback blocked by browser. Click PLAY again.')
+            other.currentTime = 0
+            rollback()
           }
         })
       return
     }
 
     stopFade()
+    pendingIdRef.current = id
     setSlotLevel(activeSlotRef.current, 1)
     const inactive = activeSlotRef.current === 'a' ? 'b' : 'a'
     setSlotLevel(inactive, 0)
@@ -1023,8 +1121,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     active.src = t.url
     active.currentTime = 0
     void active.play()
-      .then(() => notify(`Playing: ${t.artist} - ${t.name}`))
-      .catch(() => notify('Playback blocked by browser. Click PLAY again.'))
+      .then(() => commit())
+      .catch(() => {
+        if (token !== playTokenRef.current) return
+        stopFade()
+        rollback(active)
+      })
   }
   function togglePlay() {
     const audio = getActiveAudio()
@@ -1088,56 +1190,75 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     if (audio && duration > 0) audio.currentTime = (value / 1000) * (duration / 1000)
   }
   async function addFiles(fileList: FileList | null) {
-    if (!fileList?.length) return
+    if (busyRef.current || !fileList?.length) return
+    busyRef.current = true
     setBusy(true)
-    const files = Array.from(fileList).filter(f => /\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(f.name) || f.type.startsWith('audio/'))
-    const known = new Set(tracksRef.current.map(t => `${t.name}:${t.size}`))
-    const added: Track[] = []
-    for (const file of files) {
-      const meta = parseName(file.name)
-      const id3 = await parseId3(file).catch(() => ({} as Awaited<ReturnType<typeof parseId3>>))
-      const wave = file.name.toLowerCase().endsWith('.wav') ? await parseWavInfo(file) : { sampleRate: 0, bitrate: 0 }
-      const name = id3.name || meta.title
-      if (known.has(`${name}:${file.size}`)) continue
-      known.add(`${name}:${file.size}`)
-      const id = uid()
-      const track: Track = {
-        id,
-        blob: file,
-        artBlob: id3.artBlob,
-        url: makeUrl(file, id),
-        artUrl: id3.artBlob ? makeUrl(id3.artBlob, id) : undefined,
-        name,
-        artist: id3.artist || meta.artist,
-        album: id3.album || 'local archive',
-        genre: id3.genre || '',
-        duration: 0,
-        size: file.size,
-        format: (file.name.split('.').pop() || '').toUpperCase(),
-        bitrate: wave.bitrate,
-        sampleRate: wave.sampleRate,
-        favorite: false,
-        plays: 0,
-        lastPlayed: 0,
-        addedAt: Date.now() + added.length,
+    try {
+      const files = Array.from(fileList).filter(f => /\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(f.name) || f.type.startsWith('audio/'))
+      const known = new Set(tracksRef.current.map(t => `${t.name}:${t.size}`))
+      const added: Track[] = []
+      let failed = 0
+      for (const file of files) {
+        const meta = parseName(file.name)
+        const id3 = await parseId3(file).catch(() => ({} as Awaited<ReturnType<typeof parseId3>>))
+        const wave = file.name.toLowerCase().endsWith('.wav') ? await parseWavInfo(file) : { sampleRate: 0, bitrate: 0 }
+        const name = id3.name || meta.title
+        const key = `${name}:${file.size}`
+        if (known.has(key)) continue
+        const id = uid()
+        const track: Track = {
+          id,
+          blob: file,
+          artBlob: id3.artBlob,
+          url: makeUrl(file, id),
+          artUrl: id3.artBlob ? makeUrl(id3.artBlob, id) : undefined,
+          name,
+          artist: id3.artist || meta.artist,
+          album: id3.album || 'local archive',
+          genre: id3.genre || '',
+          duration: 0,
+          size: file.size,
+          format: (file.name.split('.').pop() || '').toUpperCase(),
+          bitrate: wave.bitrate,
+          sampleRate: wave.sampleRate,
+          favorite: false,
+          plays: 0,
+          lastPlayed: 0,
+          addedAt: Date.now() + added.length,
+        }
+        try {
+          await persistTrack(track)
+          known.add(key)
+          added.push(track)
+          tracksRef.current = [...added, ...tracksRef.current.filter(x => !added.some(a => a.id === x.id))]
+        } catch {
+          failed += 1
+          revokeTrackUrls(id)
+        }
       }
-      added.push(track)
-      await persistTrack(track).catch(() => {})
+      if (added.length) {
+        setTracks(prev => [...added, ...prev])
+        if (!currentIdRef.current) setCurrentId(added[0].id)
+        setSection('library')
+        notify(`Added ${added.length} track${added.length === 1 ? '' : 's'} to archive.${failed ? ` ${failed} failed to save.` : ''}`)
+        if (failed) warnStorage('Some files could not be saved to the archive.')
+      } else if (failed) {
+        warnStorage('No files were saved. Archive storage is unavailable.')
+      } else {
+        notify('No new audio files found.')
+      }
+    } finally {
+      busyRef.current = false
+      setBusy(false)
     }
-    if (added.length) {
-      setTracks(prev => [...added, ...prev])
-      if (!currentIdRef.current) setCurrentId(added[0].id)
-      setSection('library')
-      notify(`Added ${added.length} track${added.length === 1 ? '' : 's'} to archive.`)
-    } else notify('No new audio files found.')
-    setBusy(false)
   }
   function toggleFavorite(id: string) {
     const t = tracksRef.current.find(x => x.id === id)
     if (!t) return
     const updated: Track = { ...t, favorite: !t.favorite }
     setTracks(prev => prev.map(x => x.id === id ? updated : x))
-    void persistTrack(updated).catch(() => {})
+    tracksRef.current = tracksRef.current.map(x => x.id === id ? updated : x)
+    void persistTrack(updated).catch(() => warnStorage('Favorite could not be saved.'))
   }
   function editTrack(id: string) {
     const t = tracksRef.current.find(x => x.id === id)
@@ -1158,7 +1279,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       genre: genre.trim(),
     }
     setTracks(prev => prev.map(x => x.id === id ? updated : x))
-    void persistTrack(updated).catch(() => {})
+    tracksRef.current = tracksRef.current.map(x => x.id === id ? updated : x)
+    void persistTrack(updated).catch(() => warnStorage('Metadata could not be saved.'))
     notify('Metadata updated.')
   }
   function downloadTrack(id: string) {
@@ -1225,6 +1347,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     }
   }
   async function likeCatalogTrack(id: string) {
+    if (likedPendingRef.current.has(id)) return
+    likedPendingRef.current.add(id)
+    setPendingLikes(prev => [...prev, id])
     try {
       const res = await fetch(`/api/catalog/${encodeURIComponent(id)}/like`, { method: 'POST' })
       const data = (await res.json().catch(() => ({}))) as { duplicate?: boolean }
@@ -1237,6 +1362,10 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       setCatalogLikes(prev => prev + 1)
     } catch {
       notify('Like failed. Network index unavailable.')
+    } finally {
+      likedPendingRef.current.delete(id)
+      setPendingLikes(prev => prev.filter(x => x !== id))
+      void loadCatalog()
     }
   }
   function playCatalogTrack(item: CatalogTrack) {
@@ -1249,31 +1378,46 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }
   async function removeTrack(id: string) {
     if (!window.confirm('Remove this track from the local archive?')) return
+    try {
+      await dbDelete(STORE_TRACKS, id)
+    } catch {
+      warnStorage('Track could not be removed from the archive.')
+      return
+    }
     setTracks(prev => prev.filter(t => t.id !== id))
+    tracksRef.current = tracksRef.current.filter(t => t.id !== id)
     setPlaylists(prev => prev.map(p => ({ ...p, trackIds: p.trackIds.filter(x => x !== id) })))
     if (currentId === id) {
       stopFade()
       audioRef.current?.pause()
       nextAudioRef.current?.pause()
       setCurrentId(null)
+      currentIdRef.current = null
       setPlaying(false)
     }
-    await dbDelete(STORE_TRACKS, id).catch(() => {})
     revokeTrackUrls(id)
     notify('Track removed from archive.')
   }
   async function clearArchive() {
     if (!window.confirm('Clear the entire local archive? This cannot be undone.')) return
+    try {
+      await dbClear(STORE_TRACKS)
+    } catch {
+      warnStorage('Archive could not be cleared.')
+      return
+    }
+    const storedTracks = tracksRef.current
     stopFade()
     audioRef.current?.pause()
     nextAudioRef.current?.pause()
     setTracks([])
+    tracksRef.current = []
     setCurrentId(null)
+    currentIdRef.current = null
     setPlaying(false)
     setPlaylists([{ id: 'p1', name: 'webcore', trackIds: [] }])
     setSelectedPlaylistId('p1')
-    await dbClear(STORE_TRACKS).catch(() => {})
-    for (const t of tracksRef.current) revokeTrackUrls(t.id)
+    for (const t of storedTracks) revokeTrackUrls(t.id)
     urlsRef.current.clear()
     notify('Archive cleared.')
   }
@@ -1322,7 +1466,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     }))
   }
   function toggleSort(field: SortField) {
-    setSort(prev => ({ field, dir: prev.field === field && prev.dir === 'asc' ? 'desc' : 'asc' }))
+    const next = { field, dir: sort.field === field && sort.dir === 'asc' ? 'desc' as const : 'asc' as const }
+    setSort(next)
+    if (section === 'playlist') setPlaylistSort(next)
   }
   function exportLibrary() {
     const data = tracks.map(({ blob: _blob, artBlob: _artBlob, url: _url, artUrl: _artUrl, ...rest }) => rest)
@@ -1356,9 +1502,10 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     notify(`Playlist exported: ${pl.name}`)
   }
   function clampPopupPos(kind: PopupKind, x: number, y: number) {
+    const height = Math.min(POPUP_HEIGHT[kind] || 160, window.innerHeight * 0.7)
     return {
-      x: clamp(x, 0, Math.max(0, window.innerWidth - POPUP_WIDTH[kind] - 8)),
-      y: clamp(y, 0, Math.max(0, window.innerHeight - 120)),
+      x: clamp(x, 0, Math.max(0, window.innerWidth - Math.min(POPUP_WIDTH[kind], window.innerWidth) - 8)),
+      y: clamp(y, 0, Math.max(0, window.innerHeight - height - 8)),
     }
   }
   function openPopup(kind: PopupKind) {
@@ -1396,6 +1543,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   function onDrop(e: DragEvent) {
     e.preventDefault()
     setDropActive(false)
+    if (busyRef.current) return
     void addFiles(e.dataTransfer.files)
   }
   function menuAction(fn: () => void) {
@@ -1404,7 +1552,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }
 
   function sortableHeader(field: SortField, label: string) {
-    return <button className="li-thbtn" onClick={() => toggleSort(field)}>{label}{sort.field === field ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>
+    const active = section === 'playlist' ? playlistSort : sort
+    return <button className="li-thbtn" onClick={() => toggleSort(field)}>{label}{active?.field === field ? (active.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>
   }
   function renderTable() {
     return (
@@ -1412,7 +1561,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         <table className="li-table">
           <thead>
             <tr>
-              <th>#</th>
+              <th>{section === 'playlist'
+                ? <button className="li-thbtn" title="Restore manual playlist order" onClick={() => setPlaylistSort(null)}>#</button>
+                : '#'}</th>
               <th>{sortableHeader('name', 'TITLE')}</th>
               <th>{sortableHeader('artist', 'ARTIST')}</th>
               <th>{sortableHeader('album', 'ALBUM')}</th>
@@ -1426,8 +1577,15 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               <tr
                 key={t.id}
                 className={t.id === currentId ? 'is-selected' : ''}
+                tabIndex={0}
+                aria-label={`Play ${t.artist} - ${t.name}`}
                 onDoubleClick={() => playTrack(t.id)}
-                title="Double click to play"
+                onKeyDown={e => {
+                  if (e.key !== 'Enter' || e.target !== e.currentTarget) return
+                  e.preventDefault()
+                  playTrack(t.id)
+                }}
+                title="Double click or press Enter to play"
               >
                 <td>{String(i + 1).padStart(2, '0')}</td>
                 <td>{t.name}</td>
@@ -1436,19 +1594,19 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 <td>{t.duration ? fmt(t.duration) : '--:--'}</td>
                 <td>{t.plays ?? 0}</td>
                 <td>
-                  <button className="li-btn li-btn--tiny" title="Favorite" onClick={() => toggleFavorite(t.id)}>{t.favorite ? '★' : '☆'}</button>
-                  <button className="li-btn li-btn--tiny" title="Edit metadata" onClick={() => editTrack(t.id)}>EDIT</button>
-                  <button className="li-btn li-btn--tiny" title="Download original file" onClick={() => downloadTrack(t.id)}>DL</button>
-                  <button className="li-btn li-btn--tiny" title="Publish metadata to public index" onClick={() => { void publishTrack(t.id) }}>PUB</button>
-                  <button className="li-btn li-btn--tiny" title="Add to playlist" onClick={() => addToPlaylist(t.id)}>+PL</button>
+                  <button className="li-btn li-btn--tiny" title="Favorite" aria-label={`Favorite ${t.name}`} onClick={() => toggleFavorite(t.id)}>{t.favorite ? '★' : '☆'}</button>
+                  <button className="li-btn li-btn--tiny" title="Edit metadata" aria-label={`Edit ${t.name}`} onClick={() => editTrack(t.id)}>EDIT</button>
+                  <button className="li-btn li-btn--tiny" title="Download original file" aria-label={`Download ${t.name}`} onClick={() => downloadTrack(t.id)}>DL</button>
+                  <button className="li-btn li-btn--tiny" title="Publish metadata to public index" aria-label={`Publish ${t.name}`} onClick={() => { void publishTrack(t.id) }}>PUB</button>
+                  <button className="li-btn li-btn--tiny" title="Add to playlist" aria-label={`Add ${t.name} to playlist`} onClick={() => addToPlaylist(t.id)}>+PL</button>
                   {section === 'playlist' && (
                     <>
-                      <button className="li-btn li-btn--tiny" title="Move up" onClick={() => movePlaylistTrack(t.id, -1)}>↑</button>
-                      <button className="li-btn li-btn--tiny" title="Move down" onClick={() => movePlaylistTrack(t.id, 1)}>↓</button>
-                      <button className="li-btn li-btn--tiny" title="Remove from playlist" onClick={() => removeFromPlaylist(t.id)}>-PL</button>
+                      <button className="li-btn li-btn--tiny" title="Move up" aria-label={`Move ${t.name} up`} onClick={() => movePlaylistTrack(t.id, -1)}>↑</button>
+                      <button className="li-btn li-btn--tiny" title="Move down" aria-label={`Move ${t.name} down`} onClick={() => movePlaylistTrack(t.id, 1)}>↓</button>
+                      <button className="li-btn li-btn--tiny" title="Remove from playlist" aria-label={`Remove ${t.name} from playlist`} onClick={() => removeFromPlaylist(t.id)}>-PL</button>
                     </>
                   )}
-                  <button className="li-btn li-btn--tiny" title="Remove from archive" onClick={() => { void removeTrack(t.id) }}>DEL</button>
+                  <button className="li-btn li-btn--tiny" title="Remove from archive" aria-label={`Remove ${t.name} from archive`} onClick={() => { void removeTrack(t.id) }}>DEL</button>
                 </td>
               </tr>
             ))}
@@ -1646,6 +1804,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <input
             className="li-network__search"
             placeholder="search public index..."
+            aria-label="Search public index"
             value={catalogQuery}
             onChange={e => setCatalogQuery(e.target.value)}
           />
@@ -1665,8 +1824,14 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               <span>{item.format || '--'}</span>
               <span>{item.likes}</span>
               <span>
-                <button className="li-btn li-btn--tiny" title="Play if you have the local file" onClick={() => playCatalogTrack(item)}>PLAY</button>
-                <button className="li-btn li-btn--tiny" title="Like" onClick={() => { void likeCatalogTrack(item.id) }}>+1</button>
+                <button className="li-btn li-btn--tiny" title="Play if you have the local file" aria-label={`Play ${item.title} from local archive`} onClick={() => playCatalogTrack(item)}>PLAY</button>
+                <button
+                  className="li-btn li-btn--tiny"
+                  title="Like"
+                  aria-label={`Like ${item.title}`}
+                  disabled={pendingLikes.includes(item.id)}
+                  onClick={() => { void likeCatalogTrack(item.id) }}
+                >+1</button>
               </span>
             </div>
           ))}
@@ -1750,11 +1915,11 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       className={rootClasses}
       data-theme={settings.theme}
       onDragEnter={e => {
-        if (!e.dataTransfer.types.includes('Files')) return
+        if (busyRef.current || !e.dataTransfer.types.includes('Files')) return
         dragDepthRef.current += 1
         setDropActive(true)
       }}
-      onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' } }}
+      onDragOver={e => { if (!busyRef.current && e.dataTransfer.types.includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' } }}
       onDragLeave={e => {
         if (!e.dataTransfer.types.includes('Files')) return
         dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
@@ -1763,23 +1928,26 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       onDrop={e => { dragDepthRef.current = 0; onDrop(e) }}
     >
       <div className="li-window">
-        <div className="li-titlebar" onDoubleClick={() => void document.documentElement.requestFullscreen?.().catch(() => {})}>
+        <div className="li-titlebar" onDoubleClick={e => {
+          if ((e.target as HTMLElement).closest('button')) return
+          void document.documentElement.requestFullscreen?.().catch(() => {})
+        }}>
           <span className="li-titlebar__icon">◼</span>
           <span className="li-titlebar__title">lost_internet.exe</span>
           <span className="li-titlebar__tag">v1.0 // LOCAL BUILD</span>
           <div className="li-titlebar__spacer" />
-          <button className="li-winbtn" title="Toggle theme (T)" onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}>◐</button>
-          <button className="li-winbtn" title="Toggle sidebar" onClick={() => setSidebarCollapsed(v => !v)}>_</button>
-          <button className="li-winbtn" title="Fullscreen" onClick={() => void document.documentElement.requestFullscreen?.().catch(() => {})}>□</button>
-          <button className="li-winbtn li-winbtn--close" title="About" onClick={() => (onExit ? onExit() : openPopup('about'))}>X</button>
+          <button className="li-winbtn" title="Toggle theme (T)" aria-label="Toggle theme" onClick={e => { if (e.detail > 1) return; setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' })) }}>◐</button>
+          <button className="li-winbtn" title="Toggle sidebar" aria-label="Toggle sidebar" onClick={e => { if (e.detail > 1) return; setSidebarCollapsed(v => !v) }}>_</button>
+          <button className="li-winbtn" title="Fullscreen" aria-label="Fullscreen" onClick={e => { if (e.detail > 1) return; void document.documentElement.requestFullscreen?.().catch(() => {}) }}>□</button>
+          <button className="li-winbtn li-winbtn--close" title="About" aria-label="About or exit" onClick={e => { if (e.detail > 1) return; onExit ? onExit() : openPopup('about') }}>X</button>
         </div>
 
         <div className="li-menubar">{MENUS.map(m => renderMenu(m.id))}</div>
 
         <div className="li-toolbar">
           <span className="li-label">ADDR</span>
-          <input className="li-address" value={`file://localhost/music/${section}/index.htm`} readOnly />
-          <input className="li-search" placeholder="search library..." value={query} onChange={e => setQuery(e.target.value)} />
+          <input className="li-address" aria-label="Current address" value={`file://localhost/music/${section}/index.htm`} readOnly />
+          <input className="li-search" placeholder="search library..." aria-label="Search library" value={query} onChange={e => setQuery(e.target.value)} />
           <button className="li-btn" onClick={() => fileRef.current?.click()}>ADD FILES</button>
           <button className="li-btn" onClick={() => folderRef.current?.click()}>ADD FOLDER</button>
           <input ref={fileRef} type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac" multiple hidden onChange={e => { void addFiles(e.target.files); e.target.value = '' }} />
@@ -1789,13 +1957,13 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         <div className="li-body">
           <aside className="li-sidebar">
             <div className="li-sidebar__head">// INDEX.HTM</div>
-            {SECTIONS.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} onClick={() => setSection(s.id)}>{s.label}</button>)}
+            {SECTIONS.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} onClick={() => selectSection(s.id)}>{s.label}</button>)}
             <div className="li-divider" />
-            {SECONDARY.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} onClick={() => setSection(s.id)}>{s.label}</button>)}
+            {SECONDARY.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} onClick={() => selectSection(s.id)}>{s.label}</button>)}
             <div className="li-sidebar__head li-sidebar__head--gap">// PLAYLISTS</div>
             <div className="li-playlists">
               {playlists.map(p => (
-                <button key={p.id} className={`li-playlist ${selectedPlaylistId === p.id ? 'is-active' : ''}`} onClick={() => { setSelectedPlaylistId(p.id); setSection('playlist') }}>
+                <button key={p.id} className={`li-playlist ${selectedPlaylistId === p.id ? 'is-active' : ''}`} onClick={() => { setSelectedPlaylistId(p.id); setPlaylistSort(null); setSection('playlist') }}>
                   {p.name} [{p.trackIds.length}]
                 </button>
               ))}
@@ -1879,15 +2047,18 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         <div
           key={p.id}
           className="li-popup"
+          role="dialog"
+          aria-modal="false"
+          aria-label={p.title}
           style={{ left: p.x, top: p.y, width: POPUP_WIDTH[p.kind], zIndex: p.z }}
           onMouseDown={() => setPopups(prev => prev.map(x => x.id === p.id ? { ...x, z: ++zRef.current } : x))}
         >
           <div className="li-popup__title" onPointerDown={e => startDrag(e, p)} onDoubleClick={() => setPopups(prev => prev.filter(x => x.id !== p.id))}>
             <span>{p.title}</span>
-            <button className="li-popup__close" onClick={() => setPopups(prev => prev.filter(x => x.id !== p.id))}>X</button>
+            <button className="li-popup__close" aria-label={`Close ${p.title}`} onClick={() => setPopups(prev => prev.filter(x => x.id !== p.id))}>X</button>
           </div>
           <div className="li-popup__body">
-            {p.kind === 'ie' && <IePopupBody calm={settings.calm || reducedMotion} />}
+            {p.kind === 'ie' && <IePopupBody calm={settings.calm || reducedMotion} onClose={() => setPopups(prev => prev.filter(x => x.id !== p.id))} />}
             {p.kind === 'favorites' && (
               <div className="li-popup__links">
                 <button className="li-popup__link" onClick={() => notify('about:blank // nothing here')}>about:blank</button>
@@ -1916,7 +2087,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   )
 }
 
-function IePopupBody({ calm }: { calm: boolean }) {
+function IePopupBody({ calm, onClose }: { calm: boolean; onClose: () => void }) {
   const [value, setValue] = useState(calm ? 43 : 0)
   useEffect(() => {
     if (calm) return
@@ -1927,7 +2098,7 @@ function IePopupBody({ calm }: { calm: boolean }) {
     <div className="li-ie">
       <div>{value >= 100 ? 'Connection lost. Try again later.' : 'Loading happiness...'}</div>
       <div className="li-popup__bar"><div className="li-popup__fill" style={{ width: `${value}%` }} /></div>
-      <button className="li-btn" onClick={() => setValue(100)}>{value >= 100 ? 'Close' : 'Cancel'}</button>
+      <button className="li-btn" onClick={() => value >= 100 ? onClose() : setValue(100)}>{value >= 100 ? 'Close' : 'Cancel'}</button>
     </div>
   )
 }

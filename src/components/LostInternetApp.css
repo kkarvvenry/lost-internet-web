@@ -1,15 +1,39 @@
 /* LOST INTERNET web app - full replacement */
+:root {
+  --li-host-bg: #050505;
+  --li-host-text: #D6D6D6;
+  --li-scroll-track: #050505;
+  --li-scroll-thumb: #252525;
+  --li-scroll-thumb-hover: #555555;
+  color-scheme: dark;
+}
+
+html[data-theme='light'],
+body[data-theme='light'] {
+  --li-host-bg: #D6D6D6;
+  --li-host-text: #050505;
+  --li-scroll-track: #D6D6D6;
+  --li-scroll-thumb: #A5A5A5;
+  --li-scroll-thumb-hover: #555555;
+  color-scheme: light;
+}
+
 html,
 body,
 #root {
   margin: 0;
   padding: 0;
   min-height: 100%;
-  background: #050505;
+  background: var(--li-host-bg);
+  color: var(--li-host-text);
+}
+
+html,
+body {
+  transition: background-color 420ms ease, color 420ms ease;
 }
 
 body {
-  color-scheme: dark;
   overflow: hidden;
 }
 
@@ -18,22 +42,27 @@ body {
   color: #FFFFFF;
 }
 
+html[data-theme='light'] ::selection {
+  background: #A5A5A5;
+  color: #050505;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #050505;
+  background: var(--li-scroll-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #252525;
+  background: var(--li-scroll-thumb);
   border: 1px solid #555555;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555555;
+  background: var(--li-scroll-thumb-hover);
 }
 
 .li-root {
@@ -72,6 +101,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html,
+  body,
   .li-root,
   .li-root * {
     transition: none !important;
@@ -295,13 +326,23 @@ body {
   white-space: nowrap;
 }
 
-.li-btn:hover {
+.li-btn:hover:not(:disabled) {
   background: var(--li-border);
   color: var(--li-white);
 }
 
-.li-btn:active {
+.li-btn:active:not(:disabled) {
   border-style: inset;
+}
+
+.li-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.li-table tbody tr:focus-visible {
+  outline: 1px solid var(--li-white);
+  outline-offset: -1px;
 }
 
 .li-btn--primary {
@@ -1151,7 +1192,7 @@ body {
   content: 'READING ARCHIVE...';
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 1000;
   display: grid;
   place-items: center;
   background: var(--li-bg);
@@ -1159,7 +1200,6 @@ body {
   font-family: 'VT323', 'Courier New', monospace;
   font-size: 38px;
   letter-spacing: 3px;
-  pointer-events: none;
 }
 
 .li-root.is-drop::before {
@@ -1228,6 +1268,8 @@ body {
   background: var(--li-bg);
   color: var(--li-text);
   font-size: 12px;
+  max-height: min(60vh, 360px);
+  overflow: auto;
 }
 
 .li-ie {

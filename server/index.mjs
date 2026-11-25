@@ -13,6 +13,27 @@ const app = express()
 
 app.disable('x-powered-by')
 
+const catalogApi = process.env.CATALOG_API || 'https://lost-internet-web.stepanb249.workers.dev'
+app.use('/api', express.raw({ type: '*/*', limit: '64kb' }))
+app.use('/api', async (req, res) => {
+  try {
+    const upstream = await fetch(new URL(req.originalUrl, catalogApi), {
+      method: req.method,
+      headers: req.headers['content-type'] ? { 'Content-Type': req.headers['content-type'] } : {},
+      body: Buffer.isBuffer(req.body) && req.body.length ? req.body : undefined,
+    })
+    const body = Buffer.from(await upstream.arrayBuffer())
+    res.status(upstream.status)
+    for (const name of ['Content-Type', 'Cache-Control', 'Access-Control-Allow-Origin']) {
+      const value = upstream.headers.get(name)
+      if (value) res.setHeader(name, value)
+    }
+    res.send(body)
+  } catch {
+    res.status(502).json({ error: 'catalog offline' })
+  }
+})
+
 if (isProd) {
   const dist = path.join(root, 'dist')
   app.use(express.static(dist, { index: false }))
