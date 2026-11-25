@@ -135,6 +135,12 @@ function fmt(ms: number) {
   const s = Math.max(0, Math.floor(ms / 1000))
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
+function fmtBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
+  return `${(bytes / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`
+}
 function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)) }
 function dbToGain(db: number) { return Math.pow(10, db / 20) }
 function parseName(fileName: string) {
@@ -386,6 +392,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [catalogLikes, setCatalogLikes] = useState(0)
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [ready, setReady] = useState(false)
+  const [storageUsage, setStorageUsage] = useState<{ used: number; quota: number } | null>(null)
   const [updateReady, setUpdateReady] = useState(false)
   const [glitchActive, setGlitchActive] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -397,6 +404,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const visRef = useRef<HTMLCanvasElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const folderRef = useRef<HTMLInputElement | null>(null)
+  const backupRef = useRef<HTMLInputElement | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const trebleRef = useRef<BiquadFilterNode | null>(null)
@@ -552,6 +560,15 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     window.addEventListener('lost-internet-update', onUpdate)
     return () => window.removeEventListener('lost-internet-update', onUpdate)
   }, [])
+
+  useEffect(() => {
+    if (!ready || section !== 'settings' || !navigator.storage?.estimate) return
+    let cancelled = false
+    void navigator.storage.estimate().then(({ usage, quota }) => {
+      if (!cancelled) setStorageUsage({ used: usage ?? 0, quota: quota ?? 0 })
+    }).catch(() => { if (!cancelled) setStorageUsage(null) })
+    return () => { cancelled = true }
+  }, [ready, section, tracks.length])
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -1551,6 +1568,83 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     notify('Library metadata exported.')
   }
+  async function importLibrary(file: File) {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      const data = JSON.parse(await file.text()) as {
+        tracks?: any[]
+        playlists?: Playlist[]
+        settings?: Partial<Settings>
+      }
+      if (!Array.isArray(data.tracks)) throw new Error('invalid backup')
+      const existing = tracksRef.current
+      const byId = new Set(existing.map(t => t.id))
+      const known = new Set(existing.map(t => `${t.name}:${t.size}`))
+      const restored: Track[] = []
+      for (const raw of data.tracks) {
+        if (!raw || typeof raw.id !== 'string' || byId.has(raw.id)) continue
+        const name = String(raw.name ?? 'unknown title')
+        const size = Number(raw.size ?? 0)
+        const key = `${name}:${size}`
+        if (known.has(key)) continue
+        known.add(key)
+        byId.add(raw.id)
+        restored.push({
+          id: raw.id,
+          blob: undefined,
+          artBlob: undefined,
+          url: '',
+          artUrl: undefined,
+          name,
+          artist: String(raw.artist ?? 'unknown artist'),
+          album: String(raw.album ?? 'local archive'),
+          genre: String(raw.genre ?? ''),
+          duration: Number(raw.duration ?? 0),
+          size,
+          format: String(raw.format ?? ''),
+          bitrate: Number(raw.bitrate ?? 0),
+          sampleRate: Number(raw.sampleRate ?? 0),
+          favorite: Boolean(raw.favorite),
+          plays: Number(raw.plays ?? 0),
+          lastPlayed: Number(raw.lastPlayed ?? 0),
+          addedAt: Number(raw.addedAt ?? Date.now()),
+        })
+      }
+      const nextTracks = [...restored, ...existing]
+      setTracks(nextTracks)
+      tracksRef.current = nextTracks
+      if (Array.isArray(data.playlists) && data.playlists.length) {
+        const validIds = new Set(nextTracks.map(t => t.id))
+        setPlaylists(data.playlists
+          .filter(p => p && typeof p.id === 'string')
+          .map(p => ({
+            id: p.id,
+            name: String(p.name ?? 'playlist'),
+            trackIds: (Array.isArray(p.trackIds) ? p.trackIds : []).filter((id: string) => validIds.has(id)),
+          })))
+      }
+      if (data.settings && typeof data.settings === 'object') {
+        const saved = data.settings
+        setSettings({
+          ...DEFAULT_SETTINGS,
+          ...saved,
+          eq: { ...DEFAULT_SETTINGS.eq, ...(saved.eq ?? {}) },
+          theme: saved.theme === 'light' ? 'light' : 'dark',
+        })
+      }
+      let failed = 0
+      await Promise.all(restored.map(track => persistTrack(track).catch(() => { failed += 1 })))
+      notify(`Restored ${restored.length} metadata entr${restored.length === 1 ? 'y' : 'ies'}.${failed ? ` ${failed} not saved.` : ''}`)
+      if (failed) warnStorage('Some restored entries are in memory only.')
+    } catch {
+      notify('Import failed. Invalid backup file.')
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
   function exportPlaylist() {
     const pl = playlists.find(p => p.id === selectedPlaylistId)
     if (!pl) { notify('Select a playlist first.'); return }
@@ -1821,8 +1915,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         <section className="li-settings__group">
           <h3>// ARCHIVE</h3>
           <p>{tracks.length} tracks stored in this browser via IndexedDB. Audio files are never uploaded.</p>
+          {storageUsage && storageUsage.quota > 0 && (
+            <p>STORAGE: {fmtBytes(storageUsage.used)} / {fmtBytes(storageUsage.quota)} ({Math.round((storageUsage.used / storageUsage.quota) * 100)}%)</p>
+          )}
           <div className="li-setting-actions">
             <button className="li-btn" onClick={exportLibrary}>EXPORT METADATA</button>
+            <button className="li-btn" onClick={() => backupRef.current?.click()}>IMPORT METADATA</button>
             <button className="li-btn li-btn--danger" onClick={() => { void clearArchive() }}>CLEAR ARCHIVE</button>
           </div>
         </section>
@@ -1924,6 +2022,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         { label: 'Add Files...', action: () => fileRef.current?.click() },
         { label: 'Add Folder...', action: () => folderRef.current?.click() },
         { label: 'Export Metadata', action: exportLibrary },
+        { label: 'Import Metadata...', action: () => backupRef.current?.click() },
         { label: 'Export Playlist (.m3u)', action: exportPlaylist },
         { label: 'Clear Archive', action: () => { void clearArchive() }, danger: true },
       ],
@@ -2023,6 +2122,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <button className="li-btn" onClick={() => folderRef.current?.click()}>ADD FOLDER</button>
           <input ref={fileRef} type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac" multiple hidden onChange={e => { void addFiles(e.target.files); e.target.value = '' }} />
           <input ref={folderRef} type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac" multiple hidden {...({ webkitdirectory: '', directory: '' } as any)} onChange={e => { void addFiles(e.target.files); e.target.value = '' }} />
+          <input ref={backupRef} type="file" accept="application/json,.json" hidden onChange={e => { const file = e.target.files?.[0]; if (file) void importLibrary(file); e.target.value = '' }} />
         </div>
 
         <div className="li-body">
