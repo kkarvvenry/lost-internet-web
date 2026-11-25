@@ -51,7 +51,7 @@ npm run smoke # проверка живого сайта, ассетов, PWA и
 npm run verify # build + test + smoke
 ```
 
-GitHub Actions на push в `main` выполняет те же проверки и деплоит Worker. Для автодеплоя нужны repository secrets `CLOUDFLARE_API_TOKEN` и `CLOUDFLARE_ACCOUNT_ID`.
+GitHub Actions на push в `main` выполняет те же проверки и деплоит Worker. Для автодеплоя нужны repository secrets `CLOUDFLARE_API_TOKEN` и `CLOUDFLARE_ACCOUNT_ID`; без них deploy пропускается, а не помечается как failed. Инструкция — `DEPLOY.md`.
 
 ## Доступ для других
 

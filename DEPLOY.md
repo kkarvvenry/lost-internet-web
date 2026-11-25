@@ -56,6 +56,25 @@ npm run deploy
 
 Эквивалентно `npm run build && npx wrangler deploy`.
 
+### Автодеплой через GitHub Actions
+
+Workflow `.github/workflows/ci.yml` на каждый push в `main` сначала выполняет `npm ci`, `npm run build`, `npm test`, `npm run smoke`, а затем деплоит Worker. Если секреты не заданы, задача `deploy` не падает, а пропускается с предупреждением — проверки при этом остаются зелёными.
+
+Добавь два repository secret:
+
+1. GitHub → репозиторий `lost-internet-web` → **Settings → Secrets and variables → Actions → New repository secret**.
+2. `CLOUDFLARE_API_TOKEN` — API token с правами **Edit** на **Workers Scripts** и **D1** для аккаунта Cloudflare.
+3. `CLOUDFLARE_ACCOUNT_ID` — ID аккаунта из Cloudflare Dashboard (правый сайдбар → **Account ID**).
+4. После сохранения сделай `git push` или нажми **Run workflow** во вкладке Actions — задача `deploy` перестанет пропускаться.
+
+Проверить токен локально можно так:
+
+```powershell
+$env:CLOUDFLARE_API_TOKEN='...'
+$env:CLOUDFLARE_ACCOUNT_ID='...'
+npx --yes wrangler@4.168.0 whoami
+```
+
 3. Зайди в Cloudflare Dashboard → **Workers & Pages** → **Create** → **Pages** → **Connect to Git**.
 4. Выбери репозиторий `lost-internet-web`.
 5. Настройки сборки:
