@@ -24,6 +24,7 @@ https://lost-internet-web.stepanb249.workers.dev
 - `migrations/0001_init.sql` создаёт таблицу `catalog_tracks`;
 - `migrations/0002_like_hits.sql` добавляет таблицу `catalog_like_hits` для защиты от спама лайками;
 - `migrations/0003_catalog_likes_index.sql` добавляет индекс для быстрой сортировки по лайкам;
+- `migrations/0004_publish_hits.sql` добавляет таблицу дневного лимита публикаций (10 с IP);
 - API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`;
