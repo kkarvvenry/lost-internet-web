@@ -1,0 +1,1207 @@
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
+import './LostInternetApp.css'
+
+type RepeatMode = 'off' | 'all' | 'one'
+type VizMode = 'spectrum' | 'globe' | 'hybrid'
+type Section = 'now' | 'playlist' | 'library' | 'radio' | 'settings' | 'archive' | 'favorites' | 'unknown'
+type SortField = 'name' | 'artist' | 'album' | 'duration' | 'addedAt'
+type MenuKind = 'file' | 'view' | 'playback' | 'help'
+type PopupKind = 'ie' | 'favorites' | 'about'
+type Settings = {
+  volume: number
+  muted: boolean
+  shuffle: boolean
+  repeat: RepeatMode
+  vizMode: VizMode
+  vizSensitivity: number
+  scanlines: boolean
+  grain: boolean
+  glitch: boolean
+  calm: boolean
+  showPopups: boolean
+}
+type Track = {
+  id: string
+  blob?: Blob
+  artBlob?: Blob
+  url: string
+  artUrl?: string
+  name: string
+  artist: string
+  album: string
+  genre: string
+  duration: number
+  size: number
+  format: string
+  bitrate: number
+  sampleRate: number
+  favorite: boolean
+  plays: number
+  addedAt: number
+}
+type Playlist = { id: string; name: string; trackIds: string[] }
+type Popup = { id: string; kind: PopupKind; title: string; x: number; y: number; z: number }
+
+const DB_NAME = 'lost-internet-web'
+const DB_VER = 1
+const STORE_TRACKS = 'tracks'
+const STORE_META = 'meta'
+const KEY_SETTINGS = 'settings'
+const KEY_PLAYLISTS = 'playlists'
+const KEY_LAST_TRACK = 'lastTrack'
+
+const DEFAULT_SETTINGS: Settings = {
+  volume: 0.72,
+  muted: false,
+  shuffle: false,
+  repeat: 'off',
+  vizMode: 'hybrid',
+  vizSensitivity: 1,
+  scanlines: true,
+  grain: true,
+  glitch: true,
+  calm: false,
+  showPopups: true,
+}
+const SECTIONS: Array<{ id: Section; label: string }> = [
+  { id: 'now', label: 'NOW PLAYING   >' },
+  { id: 'playlist', label: 'PLAYLIST' },
+  { id: 'library', label: 'LIBRARY' },
+  { id: 'radio', label: 'RADIO' },
+  { id: 'settings', label: 'SETTINGS' },
+]
+const SECONDARY: Array<{ id: Section; label: string }> = [
+  { id: 'archive', label: 'ARCHIVE' },
+  { id: 'favorites', label: 'FAVORITES' },
+  { id: 'unknown', label: 'UNKNOWN' },
+]
+const MENUS: Array<{ id: MenuKind; label: string }> = [
+  { id: 'file', label: 'File' },
+  { id: 'view', label: 'View' },
+  { id: 'playback', label: 'Playback' },
+  { id: 'help', label: 'Help' },
+]
+const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320 }
+const POPUP_TITLE: Record<PopupKind, string> = {
+  ie: 'Internet Explorer',
+  favorites: '★ Favorites',
+  about: 'about_lost_internet.txt',
+}
+
+function uid() { return Math.random().toString(36).slice(2, 11) }
+function fmt(ms: number) {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+}
+function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)) }
+function parseName(fileName: string) {
+  const base = fileName.replace(/\.[^.]+$/, '')
+  const parts = base.split(' - ')
+  if (parts.length >= 2) return { artist: parts[0].trim() || 'unknown artist', title: parts.slice(1).join(' - ').trim() || base }
+  return { artist: 'unknown artist', title: base || 'unknown title' }
+}
+
+function openDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VER)
+    req.onupgradeneeded = () => {
+      const db = req.result
+      if (!db.objectStoreNames.contains(STORE_TRACKS)) db.createObjectStore(STORE_TRACKS, { keyPath: 'id' })
+      if (!db.objectStoreNames.contains(STORE_META)) db.createObjectStore(STORE_META, { keyPath: 'key' })
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+}
+async function dbGetAll<T>(store: string): Promise<T[]> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store, 'readonly').objectStore(store).getAll()
+    req.onsuccess = () => resolve(req.result as T[])
+    req.onerror = () => reject(req.error)
+  })
+}
+async function dbPut(store: string, value: any): Promise<void> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite')
+    tx.objectStore(store).put(value)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+async function dbDelete(store: string, key: string): Promise<void> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite')
+    tx.objectStore(store).delete(key)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+async function dbClear(store: string): Promise<void> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite')
+    tx.objectStore(store).clear()
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+function decodeId3Text(payload: Uint8Array) {
+  const encoding = payload[0]
+  const rest = payload.slice(1)
+  let text = ''
+  try {
+    if (encoding === 1) text = new TextDecoder('utf-16le').decode(rest)
+    else if (encoding === 2) text = new TextDecoder('utf-16be').decode(rest)
+    else if (encoding === 3) text = new TextDecoder('utf-8').decode(rest)
+    else text = new TextDecoder('windows-1251').decode(rest)
+  } catch {
+    text = new TextDecoder('iso-8859-1').decode(rest)
+  }
+  return text.replace(/^\uFEFF/, '').replace(/\0/g, '').trim()
+}
+function syncsafe(b: Uint8Array, o: number) { return (b[o] << 21) | (b[o + 1] << 14) | (b[o + 2] << 7) | b[o + 3] }
+async function parseId3(file: File): Promise<{ name?: string; artist?: string; album?: string; genre?: string; artBlob?: Blob }> {
+  const buf = new Uint8Array(await file.slice(0, 512 * 1024).arrayBuffer())
+  if (buf.length < 10 || String.fromCharCode(buf[0], buf[1], buf[2]) !== 'ID3') return {}
+  const version = buf[3]
+  const tag = buf.slice(10, 10 + syncsafe(buf, 6))
+  const out: { name?: string; artist?: string; album?: string; genre?: string; artBlob?: Blob } = {}
+  let pos = 0
+  while (pos + 10 <= tag.length) {
+    const id = String.fromCharCode(tag[pos], tag[pos + 1], tag[pos + 2], tag[pos + 3])
+    if (id === '\0\0\0\0') break
+    const size = version >= 4
+      ? syncsafe(tag, pos + 4)
+      : ((tag[pos + 4] << 24) | (tag[pos + 5] << 16) | (tag[pos + 6] << 8) | tag[pos + 7]) >>> 0
+    const payload = tag.slice(pos + 10, pos + 10 + size)
+    pos += 10 + size
+    if (size <= 1) continue
+    if (id === 'TIT2') out.name = decodeId3Text(payload)
+    if (id === 'TPE1') out.artist = decodeId3Text(payload)
+    if (id === 'TALB') out.album = decodeId3Text(payload)
+    if (id === 'TCON') out.genre = decodeId3Text(payload)
+    if (id === 'APIC' && !out.artBlob) {
+      let i = 1
+      while (i < payload.length && payload[i] !== 0) i++
+      const mime = new TextDecoder('latin1').decode(payload.slice(1, i))
+      i += 2
+      while (i < payload.length && payload[i] !== 0) i++
+      i += 1
+      const image = payload.slice(i)
+      if (image.length > 16) out.artBlob = new Blob([image], { type: mime || (image[0] === 0xff ? 'image/jpeg' : 'image/png') })
+    }
+  }
+  return out
+}
+async function parseWavInfo(file: File): Promise<{ sampleRate: number; bitrate: number }> {
+  try {
+    const bytes = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer())
+    const text = new TextDecoder('latin1').decode(bytes.slice(0, 12))
+    if (!text.startsWith('RIFF') || text.slice(8, 12) !== 'WAVE') return { sampleRate: 0, bitrate: 0 }
+    let pos = 12
+    while (pos + 8 <= bytes.length) {
+      const id = new TextDecoder('latin1').decode(bytes.slice(pos, pos + 4))
+      const size = bytes[pos + 4] | (bytes[pos + 5] << 8) | (bytes[pos + 6] << 16) | (bytes[pos + 7] << 24)
+      if (id === 'fmt ' && pos + 16 <= bytes.length) {
+        const rate = bytes[pos + 12] | (bytes[pos + 13] << 8) | (bytes[pos + 14] << 16) | (bytes[pos + 15] << 24)
+        const bits = bytes[pos + 18] | (bytes[pos + 19] << 8)
+        return { sampleRate: rate, bitrate: Math.round(rate * bits / 1000) }
+      }
+      pos += 8 + size + (size % 2)
+    }
+  } catch {}
+  return { sampleRate: 0, bitrate: 0 }
+}
+
+function renderArt(canvas: HTMLCanvasElement, artUrl: string | undefined, label: string, glitch: boolean) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return
+  const w = canvas.width = 430
+  const h = canvas.height = 430
+  ctx.fillStyle = '#111111'
+  ctx.fillRect(0, 0, w, h)
+  ctx.strokeStyle = '#252525'
+  ctx.lineWidth = 1
+  for (let x = 0; x < w; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke() }
+  for (let y = 0; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
+  const decor = () => {
+    ctx.strokeStyle = '#142b83'
+    ctx.strokeRect(18, 18, 393, 393)
+    ctx.beginPath()
+    ctx.moveTo(18, 215); ctx.lineTo(411, 215)
+    ctx.moveTo(215, 18); ctx.lineTo(215, 411)
+    ctx.stroke()
+    ctx.fillStyle = '#a5a5a5'
+    ctx.font = 'bold 27px Courier New'
+    ctx.textAlign = 'center'
+    ctx.fillText(label, 215, 201)
+    ctx.font = '12px Courier New'
+    ctx.fillStyle = '#d6d6d6'
+    ctx.fillText('LOSE.EXE // NO SIGNAL', 215, 225)
+    ctx.font = '11px Courier New'
+    ctx.fillStyle = '#555555'
+    ctx.fillText('lost://archive/index.htm', 215, 246)
+    ctx.textAlign = 'left'
+    ctx.fillText('+' + String(Math.floor(Date.now() / 1000) % 10000).padStart(4, '0'), 30, 404)
+  }
+  const finish = () => {
+    if (glitch) {
+      for (let y = 40; y < 400; y += 57) {
+        const shift = y % 2 ? 3 : -3
+        ctx.drawImage(canvas, 0, y, w, 6, shift, y, w, 6)
+      }
+    }
+    decor()
+  }
+  if (!artUrl) { finish(); return }
+  const img = new Image()
+  img.onload = () => {
+    const side = Math.min(img.width, img.height)
+    ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, w, h)
+    const data = ctx.getImageData(0, 0, w, h)
+    for (let i = 0; i < data.data.length; i += 4) {
+      const gray = data.data[i] * 0.299 + data.data[i + 1] * 0.587 + data.data[i + 2] * 0.114
+      const noise = Math.sin(i * 0.137) * 14
+      const v = clamp(gray + noise, 0, 255)
+      data.data[i] = v; data.data[i + 1] = v; data.data[i + 2] = v
+    }
+    for (let y = 0; y < h; y += 4) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4
+        data.data[i] *= 0.82; data.data[i + 1] *= 0.82; data.data[i + 2] *= 0.82
+      }
+    }
+    ctx.putImageData(data, 0, 0)
+    finish()
+  }
+  img.onerror = finish
+  img.src = artUrl
+}
+
+export function LostInternetApp({ onExit }: { onExit?: () => void }) {
+  const [tracks, setTracks] = useState<Track[]>([])
+  const [playlists, setPlaylists] = useState<Playlist[]>([{ id: 'p1', name: 'webcore', trackIds: [] }])
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  const [section, setSection] = useState<Section>('library')
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>('p1')
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<{ field: SortField; dir: 'asc' | 'desc' }>({ field: 'addedAt', dir: 'desc' })
+  const [currentId, setCurrentId] = useState<string | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [popups, setPopups] = useState<Popup[]>([])
+  const [openMenu, setOpenMenu] = useState<MenuKind | null>(null)
+  const [status, setStatus] = useState('Ready. Drop into the archive.')
+  const [toast, setToast] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [dropActive, setDropActive] = useState(false)
+  const [ready, setReady] = useState(false)
+  const [glitchActive, setGlitchActive] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [reducedMotion, setReducedMotion] = useState(false)
+
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const artRef = useRef<HTMLCanvasElement | null>(null)
+  const visRef = useRef<HTMLCanvasElement | null>(null)
+  const fileRef = useRef<HTMLInputElement | null>(null)
+  const folderRef = useRef<HTMLInputElement | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const levelsRef = useRef(new Float32Array(48))
+  const urlsRef = useRef<string[]>([])
+  const hydratedRef = useRef(false)
+  const popupsSeededRef = useRef(false)
+  const zRef = useRef(20)
+  const nextRef = useRef<() => void>(() => {})
+  const tracksRef = useRef(tracks)
+  const currentIdRef = useRef(currentId)
+  const settingsRef = useRef(settings)
+  const visibleRef = useRef<Track[]>([])
+
+  tracksRef.current = tracks
+  currentIdRef.current = currentId
+  settingsRef.current = settings
+
+  const current = useMemo(() => tracks.find(t => t.id === currentId) ?? null, [tracks, currentId])
+  const visibleTracks = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    let list = tracks
+    if (section === 'favorites') list = tracks.filter(t => t.favorite)
+    if (section === 'unknown') list = tracks.filter(t => !t.artist || t.artist === 'unknown artist')
+    if (section === 'archive') list = [...tracks].sort((a, b) => b.addedAt - a.addedAt)
+    if (section === 'playlist' && selectedPlaylistId) {
+      const ids = new Set(playlists.find(p => p.id === selectedPlaylistId)?.trackIds ?? [])
+      list = tracks.filter(t => ids.has(t.id))
+    }
+    if (section === 'radio') list = []
+    if (q) list = list.filter(t => `${t.name} ${t.artist} ${t.album} ${t.genre}`.toLowerCase().includes(q))
+    if (section !== 'archive') {
+      const dir = sort.dir === 'asc' ? 1 : -1
+      list = [...list].sort((a, b) => {
+        const av = String(a[sort.field] ?? '')
+        const bv = String(b[sort.field] ?? '')
+        if (sort.field === 'duration' || sort.field === 'addedAt') return (Number(a[sort.field]) - Number(b[sort.field])) * dir
+        return av.localeCompare(bv) * dir
+      })
+    }
+    return list
+  }, [tracks, query, section, selectedPlaylistId, playlists, sort])
+  visibleRef.current = visibleTracks
+  nextRef.current = handleNext
+
+  function makeUrl(blob: Blob) {
+    const url = URL.createObjectURL(blob)
+    urlsRef.current.push(url)
+    return url
+  }
+  function notify(message: string) {
+    setStatus(message)
+    setToast(message)
+  }
+  async function persistTrack(track: Track) {
+    const { url: _url, artUrl: _artUrl, ...stored } = track
+    void _url; void _artUrl
+    await dbPut(STORE_TRACKS, stored)
+  }
+
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const sync = () => setReducedMotion(query.matches)
+    sync()
+    query.addEventListener?.('change', sync)
+    return () => query.removeEventListener?.('change', sync)
+  }, [])
+
+  useEffect(() => {
+    if (hydratedRef.current) return
+    hydratedRef.current = true
+    ;(async () => {
+      try {
+        const meta = await dbGetAll<{ key: string; value: any }>(STORE_META)
+        const savedSettings = meta.find(m => m.key === KEY_SETTINGS)?.value
+        const savedPlaylists = meta.find(m => m.key === KEY_PLAYLISTS)?.value
+        const lastTrack = meta.find(m => m.key === KEY_LAST_TRACK)?.value
+        if (savedSettings) setSettings({ ...DEFAULT_SETTINGS, ...savedSettings })
+        if (Array.isArray(savedPlaylists) && savedPlaylists.length) {
+          setPlaylists(savedPlaylists)
+          setSelectedPlaylistId(savedPlaylists[0].id)
+        }
+        const stored = await dbGetAll<any>(STORE_TRACKS)
+        const hydrated: Track[] = stored.map(t => ({
+          ...t,
+          url: t.blob ? makeUrl(t.blob) : t.url,
+          artUrl: t.artBlob ? makeUrl(t.artBlob) : undefined,
+          plays: Number(t.plays ?? 0),
+        }))
+        setTracks(hydrated.sort((a, b) => Number(b.addedAt) - Number(a.addedAt)))
+        if (lastTrack && hydrated.some(t => t.id === lastTrack)) setCurrentId(lastTrack)
+        notify(`Loaded ${hydrated.length} track${hydrated.length === 1 ? '' : 's'} from archive.`)
+      } catch {
+        notify('Archive unavailable. Running in memory mode.')
+      } finally {
+        setReady(true)
+      }
+    })()
+  }, [])
+
+  useEffect(() => {
+    if (!ready) return
+    void dbPut(STORE_META, { key: KEY_SETTINGS, value: settings })
+    void dbPut(STORE_META, { key: KEY_PLAYLISTS, value: playlists })
+    if (currentId) void dbPut(STORE_META, { key: KEY_LAST_TRACK, value: currentId })
+  }, [ready, settings, playlists, currentId])
+
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(''), 2800)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.volume = settings.volume
+    audio.muted = settings.muted
+  }, [settings.volume, settings.muted])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const onTime = () => setProgress(audio.currentTime * 1000)
+    const onPlay = () => setPlaying(true)
+    const onPause = () => setPlaying(false)
+    const onEnded = () => nextRef.current()
+    const onLoaded = () => {
+      const d = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0
+      setDuration(d)
+      const t = tracksRef.current.find(x => x.id === currentIdRef.current)
+      if (t && d > 0) {
+        const updated: Track = {
+          ...t,
+          duration: d,
+          bitrate: t.bitrate || Math.round((t.size * 8) / (d / 1000) / 1000),
+        }
+        setTracks(prev => prev.map(x => x.id === updated.id ? updated : x))
+        void persistTrack(updated)
+      }
+    }
+    const onError = () => notify('Audio error. File may be unsupported or corrupted.')
+    audio.addEventListener('timeupdate', onTime)
+    audio.addEventListener('play', onPlay)
+    audio.addEventListener('pause', onPause)
+    audio.addEventListener('ended', onEnded)
+    audio.addEventListener('loadedmetadata', onLoaded)
+    audio.addEventListener('error', onError)
+    return () => {
+      audio.removeEventListener('timeupdate', onTime)
+      audio.removeEventListener('play', onPlay)
+      audio.removeEventListener('pause', onPause)
+      audio.removeEventListener('ended', onEnded)
+      audio.removeEventListener('loadedmetadata', onLoaded)
+      audio.removeEventListener('error', onError)
+    }
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.altKey) return
+      const key = e.key.toLowerCase()
+      if (e.code === 'Space') { e.preventDefault(); togglePlay() }
+      if (e.ctrlKey && e.key === 'ArrowRight') { e.preventDefault(); handleNext() }
+      if (e.ctrlKey && e.key === 'ArrowLeft') { e.preventDefault(); handlePrev() }
+      if (e.ctrlKey && key === 'f') { e.preventDefault(); setSection('library'); document.querySelector<HTMLInputElement>('.li-search')?.focus() }
+      if (e.ctrlKey && key === 'o') { e.preventDefault(); fileRef.current?.click() }
+      if (key === 'm') setSettings(s => ({ ...s, muted: !s.muted }))
+      if (key === 'n') handleNext()
+      if (key === 'p') handlePrev()
+      if (key === 's') setSettings(s => ({ ...s, shuffle: !s.shuffle }))
+      if (key === 'r') cycleRepeat()
+      if (['1', '2', '3'].includes(key)) setSettings(s => ({ ...s, vizMode: key === '1' ? 'spectrum' : key === '2' ? 'globe' : 'hybrid' }))
+      if (e.key === 'Escape') { setOpenMenu(null); setPopups([]) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
+  useEffect(() => {
+    const closeMenus = (e: globalThis.MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('.li-menubar')) setOpenMenu(null)
+    }
+    document.addEventListener('mousedown', closeMenus)
+    return () => document.removeEventListener('mousedown', closeMenus)
+  }, [])
+
+  useEffect(() => {
+    if (!currentId || !settings.glitch || settings.calm || reducedMotion) return
+    setGlitchActive(true)
+    const timer = window.setTimeout(() => setGlitchActive(false), 170)
+    return () => window.clearTimeout(timer)
+  }, [currentId, settings.glitch, settings.calm, reducedMotion])
+
+  useEffect(() => {
+    if (artRef.current) renderArt(artRef.current, current?.artUrl, current ? 'ARCHIVE IMAGE' : 'NO SIGNAL', glitchActive)
+  }, [current?.id, current?.artUrl, glitchActive])
+
+  useEffect(() => {
+    if (!ready || popupsSeededRef.current || !settings.showPopups) return
+    popupsSeededRef.current = true
+    setPopups([
+      { id: uid(), kind: 'ie', title: POPUP_TITLE.ie, x: 520, y: 86, z: 21 },
+      { id: uid(), kind: 'favorites', title: POPUP_TITLE.favorites, x: 560, y: 292, z: 22 },
+    ])
+  }, [ready, settings.showPopups])
+
+  useEffect(() => {
+    const canvas = visRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const draw = (time: number) => {
+      const c = visRef.current
+      if (!c || !ctx) return
+      const w = c.width = c.clientWidth || 640
+      const h = c.height = c.clientHeight || 170
+      const s = settingsRef.current
+      const analyser = analyserRef.current
+      const active = Boolean(analyser && playing)
+      ctx.fillStyle = '#050505'
+      ctx.fillRect(0, 0, w, h)
+      ctx.strokeStyle = '#252525'
+      ctx.lineWidth = 1
+      for (let x = 0; x < w; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke() }
+      for (let y = 0; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
+      const bins = 48
+      const freq = analyser ? new Uint8Array(analyser.frequencyBinCount) : null
+      if (analyser && freq) analyser.getByteFrequencyData(freq)
+      const levels = levelsRef.current
+      const maxBin = freq ? freq.length - 1 : bins - 1
+      const glitching = active && !s.calm && (time % 9000) < 130
+      const shift = glitching ? 2 : 0
+      const step = w / bins
+      for (let i = 0; i < bins; i++) {
+        const idx = freq ? Math.min(maxBin, Math.floor(Math.pow(i / bins, 1.7) * maxBin)) : 0
+        const target = active && freq
+          ? clamp((freq[idx] / 255) * s.vizSensitivity, 0, 1)
+          : 0.025 + 0.018 * (0.5 + 0.5 * Math.sin(time / 900 + i * 0.45))
+        levels[i] += (target - levels[i]) * (active ? 0.24 : 0.05)
+        if (s.vizMode !== 'globe') {
+          const bh = 2 + levels[i] * h * 0.68
+          ctx.fillStyle = i % 9 === 0 ? '#790d18' : '#142b83'
+          ctx.fillRect(i * step + 2 + shift, h - bh - 12, Math.max(2, step - 4), bh)
+        }
+      }
+      if (s.vizMode !== 'spectrum') {
+        const cx = w * 0.5 + shift
+        const cy = h * 0.4
+        const r = Math.min(w, h) * 0.25
+        const energy = levels.reduce((sum, v) => sum + v, 0) / bins
+        ctx.strokeStyle = '#a5a5a5'
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
+        ctx.strokeStyle = '#142b83'
+        ctx.beginPath(); ctx.ellipse(cx, cy, r, Math.max(2, r * (0.28 + energy * 0.18)), 0, 0, Math.PI * 2); ctx.stroke()
+        for (let i = 0; i < 6; i++) {
+          const angle = time / 2600 + i * Math.PI / 6
+          ctx.strokeStyle = i % 2 ? '#555555' : '#a5a5a5'
+          ctx.beginPath(); ctx.ellipse(cx, cy, Math.max(2, r * Math.abs(Math.cos(angle))), r, 0, 0, Math.PI * 2); ctx.stroke()
+        }
+      }
+      ctx.fillStyle = '#555555'
+      ctx.font = '10px Courier New'
+      ctx.fillText(`SPECTRUM // ${bins} BANDS // ${s.vizMode.toUpperCase()}`, 12, h - 8)
+      ctx.textAlign = 'right'
+      ctx.fillText(active ? 'SIGNAL:LOCK' : 'SIGNAL:IDLE', w - 12, h - 8)
+      ctx.textAlign = 'left'
+    }
+    if (reducedMotion || settings.calm) {
+      draw(0)
+      return
+    }
+    let last = 0
+    const loop = (time: number) => {
+      if (document.hidden) { rafRef.current = requestAnimationFrame(loop); return }
+      if (time - last >= 32) { draw(time); last = time }
+      rafRef.current = requestAnimationFrame(loop)
+    }
+    rafRef.current = requestAnimationFrame(loop)
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
+  }, [playing, reducedMotion, settings.calm, settings.vizMode, settings.vizSensitivity])
+
+  useEffect(() => () => { for (const url of urlsRef.current) URL.revokeObjectURL(url) }, [])
+
+  function ensureAudioContext() {
+    const audio = audioRef.current
+    if (!audio || audioCtxRef.current) return
+    const Ctx = window.AudioContext || (window as any).webkitAudioContext
+    if (!Ctx) return
+    const context: AudioContext = new Ctx()
+    const analyser = context.createAnalyser()
+    analyser.fftSize = 512
+    analyser.smoothingTimeConstant = 0.82
+    try {
+      const source = context.createMediaElementSource(audio)
+      source.connect(analyser)
+      analyser.connect(context.destination)
+      audioCtxRef.current = context
+      analyserRef.current = analyser
+    } catch {
+      analyserRef.current = analyser
+    }
+  }
+  function cycleRepeat() {
+    setSettings(s => ({ ...s, repeat: s.repeat === 'off' ? 'all' : s.repeat === 'all' ? 'one' : 'off' }))
+  }
+  function playTrack(id: string) {
+    const t = tracks.find(x => x.id === id)
+    const audio = audioRef.current
+    if (!t || !audio || !t.url) { notify('Track source is unavailable.'); return }
+    setCurrentId(id)
+    setSection('now')
+    setProgress(0)
+    setTracks(prev => prev.map(x => x.id === id ? { ...x, plays: (x.plays ?? 0) + 1 } : x))
+    window.setTimeout(() => { void persistTrackById(id) }, 0)
+    ensureAudioContext()
+    audio.src = t.url
+    void audioCtxRef.current?.resume()
+    audio.play()
+      .then(() => notify(`Playing: ${t.artist} - ${t.name}`))
+      .catch(() => notify('Playback blocked by browser. Click PLAY again.'))
+  }
+  function togglePlay() {
+    const audio = audioRef.current
+    if (!audio) return
+    if (!current && visibleTracks[0]) { playTrack(visibleTracks[0].id); return }
+    if (!current) return
+    if (!audio.src) { ensureAudioContext(); audio.src = current.url; }
+    if (audio.paused) {
+      ensureAudioContext()
+      void audioCtxRef.current?.resume()
+      void audio.play().catch(() => notify('Playback blocked by browser.'))
+    } else audio.pause()
+  }
+  function handleNext() {
+    const list = visibleRef.current.length ? visibleRef.current : tracksRef.current
+    if (!list.length) return
+    const s = settingsRef.current
+    const audio = audioRef.current
+    if (s.repeat === 'one' && audio) { audio.currentTime = 0; void audio.play().catch(() => {}); return }
+    const index = list.findIndex(t => t.id === currentIdRef.current)
+    let next = s.shuffle ? Math.floor(Math.random() * list.length) : index + 1
+    if (!s.shuffle && next >= list.length) {
+      if (s.repeat === 'all') next = 0
+      else { audio?.pause(); return }
+    }
+    if (s.shuffle && list.length > 1 && list[next]?.id === currentIdRef.current) next = (next + 1) % list.length
+    if (list[next]) playTrack(list[next].id)
+  }
+  function handlePrev() {
+    const audio = audioRef.current
+    if (audio && audio.currentTime > 3) { audio.currentTime = 0; return }
+    const list = visibleRef.current.length ? visibleRef.current : tracksRef.current
+    if (!list.length) return
+    const index = list.findIndex(t => t.id === currentIdRef.current)
+    const prev = index <= 0 ? list.length - 1 : index - 1
+    if (list[prev]) playTrack(list[prev].id)
+  }
+  function seek(value: number) {
+    const audio = audioRef.current
+    if (audio && duration > 0) audio.currentTime = (value / 1000) * (duration / 1000)
+  }
+  async function addFiles(fileList: FileList | null) {
+    if (!fileList?.length) return
+    setBusy(true)
+    const files = Array.from(fileList).filter(f => /\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(f.name) || f.type.startsWith('audio/'))
+    const known = new Set(tracksRef.current.map(t => `${t.name}:${t.size}`))
+    const added: Track[] = []
+    for (const file of files) {
+      const meta = parseName(file.name)
+      const id3 = await parseId3(file).catch(() => ({} as Awaited<ReturnType<typeof parseId3>>))
+      const wave = file.name.toLowerCase().endsWith('.wav') ? await parseWavInfo(file) : { sampleRate: 0, bitrate: 0 }
+      const name = id3.name || meta.title
+      if (known.has(`${name}:${file.size}`)) continue
+      known.add(`${name}:${file.size}`)
+      const track: Track = {
+        id: uid(),
+        blob: file,
+        artBlob: id3.artBlob,
+        url: makeUrl(file),
+        artUrl: id3.artBlob ? makeUrl(id3.artBlob) : undefined,
+        name,
+        artist: id3.artist || meta.artist,
+        album: id3.album || 'local archive',
+        genre: id3.genre || '',
+        duration: 0,
+        size: file.size,
+        format: (file.name.split('.').pop() || '').toUpperCase(),
+        bitrate: wave.bitrate,
+        sampleRate: wave.sampleRate,
+        favorite: false,
+        plays: 0,
+        addedAt: Date.now() + added.length,
+      }
+      added.push(track)
+      await persistTrack(track).catch(() => {})
+    }
+    if (added.length) {
+      setTracks(prev => [...added, ...prev])
+      if (!currentIdRef.current) setCurrentId(added[0].id)
+      setSection('library')
+      notify(`Added ${added.length} track${added.length === 1 ? '' : 's'} to archive.`)
+    } else notify('No new audio files found.')
+    setBusy(false)
+  }
+  async function persistTrackById(id: string) {
+    const t = tracksRef.current.find(x => x.id === id)
+    if (t) await persistTrack(t).catch(() => {})
+  }
+  function toggleFavorite(id: string) {
+    setTracks(prev => prev.map(t => t.id === id ? { ...t, favorite: !t.favorite } : t))
+    window.setTimeout(() => { void persistTrackById(id) }, 0)
+  }
+  async function removeTrack(id: string) {
+    if (!window.confirm('Remove this track from the local archive?')) return
+    setTracks(prev => prev.filter(t => t.id !== id))
+    setPlaylists(prev => prev.map(p => ({ ...p, trackIds: p.trackIds.filter(x => x !== id) })))
+    if (currentId === id) { audioRef.current?.pause(); setCurrentId(null); setPlaying(false) }
+    await dbDelete(STORE_TRACKS, id).catch(() => {})
+    notify('Track removed from archive.')
+  }
+  async function clearArchive() {
+    if (!window.confirm('Clear the entire local archive? This cannot be undone.')) return
+    audioRef.current?.pause()
+    setTracks([])
+    setCurrentId(null)
+    setPlaying(false)
+    setPlaylists([{ id: 'p1', name: 'webcore', trackIds: [] }])
+    setSelectedPlaylistId('p1')
+    await dbClear(STORE_TRACKS).catch(() => {})
+    notify('Archive cleared.')
+  }
+  function createPlaylist() {
+    const name = window.prompt('Playlist name', `playlist_${playlists.length + 1}`)
+    if (!name?.trim()) return
+    const pl: Playlist = { id: uid(), name: name.trim(), trackIds: [] }
+    setPlaylists(prev => [...prev, pl])
+    setSelectedPlaylistId(pl.id)
+    setSection('playlist')
+    notify(`Playlist created: ${pl.name}`)
+  }
+  function renamePlaylist(id: string) {
+    const pl = playlists.find(p => p.id === id)
+    if (!pl) return
+    const name = window.prompt('Rename playlist', pl.name)
+    if (!name?.trim()) return
+    setPlaylists(prev => prev.map(p => p.id === id ? { ...p, name: name.trim() } : p))
+  }
+  function deletePlaylist(id: string) {
+    if (!window.confirm('Delete this playlist? Audio files are not removed.')) return
+    setPlaylists(prev => prev.filter(p => p.id !== id))
+    if (selectedPlaylistId === id) setSelectedPlaylistId(null)
+  }
+  function addToPlaylist(trackId: string) {
+    const pid = selectedPlaylistId || playlists[0]?.id
+    if (!pid) { notify('Create a playlist first.'); return }
+    setPlaylists(prev => prev.map(p => p.id === pid && !p.trackIds.includes(trackId) ? { ...p, trackIds: [...p.trackIds, trackId] } : p))
+    notify('Track added to playlist.')
+  }
+  function removeFromPlaylist(trackId: string) {
+    if (!selectedPlaylistId) return
+    setPlaylists(prev => prev.map(p => p.id === selectedPlaylistId ? { ...p, trackIds: p.trackIds.filter(x => x !== trackId) } : p))
+    notify('Track removed from playlist.')
+  }
+  function movePlaylistTrack(trackId: string, delta: number) {
+    if (!selectedPlaylistId) return
+    setPlaylists(prev => prev.map(p => {
+      if (p.id !== selectedPlaylistId) return p
+      const ids = [...p.trackIds]
+      const index = ids.indexOf(trackId)
+      const target = index + delta
+      if (index < 0 || target < 0 || target >= ids.length) return p
+      ;[ids[index], ids[target]] = [ids[target], ids[index]]
+      return { ...p, trackIds: ids }
+    }))
+  }
+  function toggleSort(field: SortField) {
+    setSort(prev => ({ field, dir: prev.field === field && prev.dir === 'asc' ? 'desc' : 'asc' }))
+  }
+  function exportLibrary() {
+    const data = tracks.map(({ blob: _blob, artBlob: _artBlob, url: _url, artUrl: _artUrl, ...rest }) => rest)
+    const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), tracks: data, playlists, settings }, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'lost_internet_library.json'
+    a.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    notify('Library metadata exported.')
+  }
+  function openPopup(kind: PopupKind) {
+    const x = kind === 'ie' ? 520 : kind === 'favorites' ? 560 : 420
+    const y = kind === 'ie' ? 86 : kind === 'favorites' ? 292 : 180
+    setPopups(prev => {
+      const existing = prev.find(p => p.kind === kind)
+      if (existing) return prev.map(p => p.id === existing.id ? { ...p, z: ++zRef.current } : p)
+      return [...prev, { id: uid(), kind, title: POPUP_TITLE[kind], x, y, z: ++zRef.current }]
+    })
+  }
+  function startDrag(e: MouseEvent<HTMLDivElement>, popup: Popup) {
+    e.preventDefault()
+    const startX = e.clientX
+    const startY = e.clientY
+    const width = POPUP_WIDTH[popup.kind]
+    const onMove = (ev: globalThis.MouseEvent) => {
+      const x = clamp(popup.x + ev.clientX - startX, 0, Math.max(0, window.innerWidth - width - 8))
+      const y = clamp(popup.y + ev.clientY - startY, 0, Math.max(0, window.innerHeight - 120))
+      setPopups(prev => prev.map(p => p.id === popup.id ? { ...p, x, y } : p))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+  function onDrop(e: DragEvent) {
+    e.preventDefault()
+    setDropActive(false)
+    void addFiles(e.dataTransfer.files)
+  }
+  function menuAction(fn: () => void) {
+    fn()
+    setOpenMenu(null)
+  }
+
+  function sortableHeader(field: SortField, label: string) {
+    return <button className="li-thbtn" onClick={() => toggleSort(field)}>{label}{sort.field === field ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>
+  }
+  function renderTable() {
+    return (
+      <div className="li-table-wrap">
+        <table className="li-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>{sortableHeader('name', 'TITLE')}</th>
+              <th>{sortableHeader('artist', 'ARTIST')}</th>
+              <th>{sortableHeader('album', 'ALBUM')}</th>
+              <th>{sortableHeader('duration', 'TIME')}</th>
+              <th>ACTIONS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleTracks.map((t, i) => (
+              <tr
+                key={t.id}
+                className={t.id === currentId ? 'is-selected' : ''}
+                onDoubleClick={() => playTrack(t.id)}
+                title="Double click to play"
+              >
+                <td>{String(i + 1).padStart(2, '0')}</td>
+                <td>{t.name}</td>
+                <td>{t.artist}</td>
+                <td>{t.album}</td>
+                <td>{t.duration ? fmt(t.duration) : '--:--'}</td>
+                <td>
+                  <button className="li-btn li-btn--tiny" title="Favorite" onClick={() => toggleFavorite(t.id)}>{t.favorite ? '★' : '☆'}</button>
+                  <button className="li-btn li-btn--tiny" title="Add to playlist" onClick={() => addToPlaylist(t.id)}>+PL</button>
+                  {section === 'playlist' && (
+                    <>
+                      <button className="li-btn li-btn--tiny" title="Move up" onClick={() => movePlaylistTrack(t.id, -1)}>↑</button>
+                      <button className="li-btn li-btn--tiny" title="Move down" onClick={() => movePlaylistTrack(t.id, 1)}>↓</button>
+                      <button className="li-btn li-btn--tiny" title="Remove from playlist" onClick={() => removeFromPlaylist(t.id)}>-PL</button>
+                    </>
+                  )}
+                  <button className="li-btn li-btn--tiny" title="Remove from archive" onClick={() => { void removeTrack(t.id) }}>DEL</button>
+                </td>
+              </tr>
+            ))}
+            {visibleTracks.length === 0 && (
+              <tr><td colSpan={6} className="li-empty">No tracks. Use ADD FILES / ADD FOLDER or drop audio files here.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+  function renderSettings() {
+    return (
+      <div className="li-panel li-settings">
+        <section className="li-settings__group">
+          <h3>// VISUALIZER</h3>
+          <div className="li-segmented">
+            {(['spectrum', 'globe', 'hybrid'] as VizMode[]).map(mode => (
+              <button key={mode} className={settings.vizMode === mode ? 'is-active' : ''} onClick={() => setSettings(s => ({ ...s, vizMode: mode }))}>{mode.toUpperCase()}</button>
+            ))}
+          </div>
+          <label className="li-setting-row">
+            <span>SENSITIVITY</span>
+            <input className="li-range" type="range" min={0.4} max={2} step={0.05} value={settings.vizSensitivity} onChange={e => setSettings(s => ({ ...s, vizSensitivity: Number(e.target.value) }))} />
+            <span>{settings.vizSensitivity.toFixed(2)}x</span>
+          </label>
+        </section>
+        <section className="li-settings__group">
+          <h3>// ATMOSPHERE</h3>
+          {([
+            ['scanlines', 'CRT SCANLINES'],
+            ['grain', 'FILM GRAIN'],
+            ['glitch', 'GLITCH ON TRACK CHANGE'],
+            ['showPopups', 'SHOW SYSTEM POPUPS'],
+            ['calm', 'CALM MODE / REDUCED MOTION'],
+          ] as Array<[keyof Settings, string]>).map(([key, label]) => (
+            <label className="li-check" key={String(key)}>
+              <input type="checkbox" checked={Boolean(settings[key])} onChange={e => setSettings(s => ({ ...s, [key]: e.target.checked }))} />
+              <span>{label}</span>
+            </label>
+          ))}
+        </section>
+        <section className="li-settings__group">
+          <h3>// ARCHIVE</h3>
+          <p>{tracks.length} tracks stored in this browser via IndexedDB. Audio files are never uploaded.</p>
+          <div className="li-setting-actions">
+            <button className="li-btn" onClick={exportLibrary}>EXPORT METADATA</button>
+            <button className="li-btn li-btn--danger" onClick={() => { void clearArchive() }}>CLEAR ARCHIVE</button>
+          </div>
+        </section>
+      </div>
+    )
+  }
+  function renderRadio() {
+    const stations = ['dreams://ambient', 'lost://webcore', 'forever.exe/noise', 'archive://static']
+    return (
+      <div className="li-panel li-radio">
+        <div className="li-radio__head">
+          <span className="li-under">UNDER CONSTRUCTION</span>
+          <h3>STATION SCANNER</h3>
+          <p>Network radio is intentionally offline. This machine only plays local files.</p>
+        </div>
+        <div className="li-radio__list">
+          {stations.map((station, i) => (
+            <button key={station} className="li-radio__item" onClick={() => notify(`${station} // NO CARRIER`)}>
+              <span>0{i + 1}</span><span>{station}</span><span>OFFLINE</span>
+            </button>
+          ))}
+        </div>
+        <div className="li-radio__meter" aria-hidden="true">{Array.from({ length: 24 }, (_, i) => <span key={i} style={{ height: `${8 + ((i * 7) % 21)}px` }} />)}</div>
+      </div>
+    )
+  }
+  function renderNowPanel() {
+    const upcoming = visibleTracks.slice(0, 6)
+    return (
+      <div className="li-panel li-nowlist">
+        <div className="li-nowlist__head"><span>// QUEUE</span><span>{tracks.length} TRACKS</span></div>
+        {upcoming.map((t, i) => (
+          <button key={t.id} className={`li-nowlist__item ${t.id === currentId ? 'is-current' : ''}`} onClick={() => playTrack(t.id)}>
+            <span>{String(i + 1).padStart(2, '0')}</span><span>{t.name}</span><span>{t.artist}</span><span>{t.duration ? fmt(t.duration) : '--:--'}</span>
+          </button>
+        ))}
+        {!upcoming.length && <div className="li-empty">Queue is empty. Add files to begin.</div>}
+      </div>
+    )
+  }
+  function sectionBody() {
+    if (section === 'settings') return renderSettings()
+    if (section === 'radio') return renderRadio()
+    if (section === 'now') return renderNowPanel()
+    return renderTable()
+  }
+  function renderMenu(id: MenuKind) {
+    const items: Record<MenuKind, Array<{ label: string; action: () => void; danger?: boolean }>> = {
+      file: [
+        { label: 'Add Files...', action: () => fileRef.current?.click() },
+        { label: 'Add Folder...', action: () => folderRef.current?.click() },
+        { label: 'Export Metadata', action: exportLibrary },
+        { label: 'Clear Archive', action: () => { void clearArchive() }, danger: true },
+      ],
+      view: [
+        { label: 'Now Playing', action: () => setSection('now') },
+        { label: 'Library', action: () => setSection('library') },
+        { label: 'Playlists', action: () => setSection('playlist') },
+        { label: 'Settings', action: () => setSection('settings') },
+        { label: 'Toggle Popups', action: () => setSettings(s => ({ ...s, showPopups: !s.showPopups })) },
+        { label: 'Internet Explorer', action: () => openPopup('ie') },
+        { label: 'Favorites', action: () => openPopup('favorites') },
+      ],
+      playback: [
+        { label: 'Play / Pause', action: togglePlay },
+        { label: 'Next', action: handleNext },
+        { label: 'Previous', action: handlePrev },
+        { label: 'Shuffle', action: () => setSettings(s => ({ ...s, shuffle: !s.shuffle })) },
+        { label: 'Cycle Repeat', action: cycleRepeat },
+        { label: 'Mute', action: () => setSettings(s => ({ ...s, muted: !s.muted })) },
+      ],
+      help: [
+        { label: 'About', action: () => openPopup('about') },
+        { label: 'Fake URLs', action: () => openPopup('favorites') },
+        { label: 'Keyboard: Space / N / P / M', action: () => notify('Space play, N next, P prev, M mute, S shuffle, R repeat') },
+      ],
+    }
+    return (
+      <div className="li-menu-wrap" key={id}>
+        <button
+          className={`li-menu ${openMenu === id ? 'is-open' : ''}`}
+          onClick={() => setOpenMenu(openMenu === id ? null : id)}
+        >
+          {MENUS.find(m => m.id === id)?.label}
+        </button>
+        {openMenu === id && (
+          <div className="li-menu-pop">
+            {items[id].map(item => (
+              <button key={item.label} className={item.danger ? 'is-danger' : ''} onClick={() => menuAction(item.action)}>{item.label}</button>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const rootClasses = [
+    'li-root',
+    sidebarCollapsed ? 'is-collapsed' : '',
+    settings.scanlines && !settings.calm && !reducedMotion ? 'fx-scanlines' : '',
+    settings.grain && !settings.calm && !reducedMotion ? 'fx-grain' : '',
+    glitchActive ? 'is-glitch' : '',
+    dropActive ? 'is-drop' : '',
+    busy ? 'is-busy' : '',
+  ].filter(Boolean).join(' ')
+
+  return (
+    <div
+      className={rootClasses}
+      onDragEnter={e => { if (e.dataTransfer.types.includes('Files')) setDropActive(true) }}
+      onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' } }}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropActive(false) }}
+      onDrop={onDrop}
+    >
+      <div className="li-window">
+        <div className="li-titlebar" onDoubleClick={() => void document.documentElement.requestFullscreen?.().catch(() => {})}>
+          <span className="li-titlebar__icon">◼</span>
+          <span className="li-titlebar__title">lost_internet.exe</span>
+          <span className="li-titlebar__tag">v1.0 // LOCAL BUILD</span>
+          <div className="li-titlebar__spacer" />
+          <button className="li-winbtn" title="Toggle sidebar" onClick={() => setSidebarCollapsed(v => !v)}>_</button>
+          <button className="li-winbtn" title="Fullscreen" onClick={() => void document.documentElement.requestFullscreen?.().catch(() => {})}>□</button>
+          <button className="li-winbtn li-winbtn--close" title="About" onClick={() => (onExit ? onExit() : openPopup('about'))}>X</button>
+        </div>
+
+        <div className="li-menubar">{MENUS.map(m => renderMenu(m.id))}</div>
+
+        <div className="li-toolbar">
+          <span className="li-label">ADDR</span>
+          <input className="li-address" value={`file://localhost/music/${section}/index.htm`} readOnly />
+          <input className="li-search" placeholder="search library..." value={query} onChange={e => setQuery(e.target.value)} />
+          <button className="li-btn" onClick={() => fileRef.current?.click()}>ADD FILES</button>
+          <button className="li-btn" onClick={() => folderRef.current?.click()}>ADD FOLDER</button>
+          <input ref={fileRef} type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac" multiple hidden onChange={e => { void addFiles(e.target.files); e.target.value = '' }} />
+          <input ref={folderRef} type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac" multiple hidden {...({ webkitdirectory: '', directory: '' } as any)} onChange={e => { void addFiles(e.target.files); e.target.value = '' }} />
+        </div>
+
+        <div className="li-body">
+          <aside className="li-sidebar">
+            <div className="li-sidebar__head">// INDEX.HTM</div>
+            {SECTIONS.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} onClick={() => setSection(s.id)}>{s.label}</button>)}
+            <div className="li-divider" />
+            {SECONDARY.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} onClick={() => setSection(s.id)}>{s.label}</button>)}
+            <div className="li-sidebar__head li-sidebar__head--gap">// PLAYLISTS</div>
+            <div className="li-playlists">
+              {playlists.map(p => (
+                <button key={p.id} className={`li-playlist ${selectedPlaylistId === p.id ? 'is-active' : ''}`} onClick={() => { setSelectedPlaylistId(p.id); setSection('playlist') }}>
+                  {p.name} [{p.trackIds.length}]
+                </button>
+              ))}
+            </div>
+            <div className="li-sidebar__actions">
+              <button className="li-btn" onClick={createPlaylist}>+ NEW</button>
+              <button className="li-btn" onClick={() => selectedPlaylistId && renamePlaylist(selectedPlaylistId)}>REN</button>
+              <button className="li-btn" onClick={() => selectedPlaylistId && deletePlaylist(selectedPlaylistId)}>DEL</button>
+            </div>
+            <div className="li-sidebar__quote">music{"\n"}is the only{"\n"}real thing.</div>
+          </aside>
+
+          <main className="li-stage">
+            <div className="li-top">
+              <div className="li-art-wrap">
+                <canvas ref={artRef} className="li-art-canvas" />
+                <span className="li-art__stamp">NO. {String(tracks.length).padStart(3, '0')}</span>
+              </div>
+              <div className="li-info">
+                <div className="li-now">{playing ? 'NOW PLAYING...' : 'STANDBY...'}</div>
+                <h1 className="li-track-title" title={current?.name}>{current?.name || 'dreamscape.exe'}</h1>
+                <p className="li-track-artist">{current?.artist || 'unknown artist'}</p>
+                <p className="li-track-meta">// {current?.album || 'webcore collection'}</p>
+                <div className="li-infogrid">
+                  <div className="k">ALBUM</div><div className="v" title={current?.album}>{current?.album || '-'}</div>
+                  <div className="k">GENRE</div><div className="v">{current?.genre || '-'}</div>
+                  <div className="k">FORMAT</div><div className="v">{current?.format || '-'}</div>
+                  <div className="k">BITRATE</div><div className="v">{current?.bitrate ? `${current.bitrate} kbps` : '-'}</div>
+                  <div className="k">SAMPLE</div><div className="v">{current?.sampleRate ? `${current.sampleRate} Hz` : '-'}</div>
+                  <div className="k">PLAYS</div><div className="v">{current?.plays ?? '-'}</div>
+                  <div className="k">PATH</div><div className="v" title={current?.name}>{current ? (current.blob as File | undefined)?.name || current.name : '-'}</div>
+                </div>
+                <div className="li-info__actions">
+                  <button className="li-btn" onClick={() => setSection('settings')}>CONFIG.SYS</button>
+                  <button className="li-btn" onClick={() => openPopup('ie')}>IE POPUP</button>
+                  <button className="li-btn" onClick={() => openPopup('favorites')}>FAVORITES</button>
+                </div>
+                <div className="li-badges">
+                  <span className="li-counter">VISITORS: 000001337</span>
+                  <span className="li-under">UNDER CONSTRUCTION</span>
+                </div>
+              </div>
+            </div>
+
+            {sectionBody()}
+
+            <div className="li-vis"><canvas ref={visRef} /></div>
+
+            <div className="li-controls">
+              <div className="li-progress-row">
+                <span className="li-time">{fmt(progress)}</span>
+                <input className="li-range" type="range" min={0} max={1000} value={duration ? Math.floor((progress / duration) * 1000) : 0} onChange={e => seek(Number(e.target.value))} aria-label="Seek" />
+                <span className="li-time">{fmt(duration)}</span>
+              </div>
+              <div className="li-buttons-row">
+                <button className={`li-ctrl ${settings.shuffle ? 'is-active' : ''}`} title="Shuffle (S)" onClick={() => setSettings(s => ({ ...s, shuffle: !s.shuffle }))}>SHUF</button>
+                <button className="li-ctrl" title="Previous (P)" onClick={handlePrev}>PREV</button>
+                <button className="li-ctrl li-ctrl--play" title="Play / Pause (Space)" onClick={togglePlay}>{playing ? 'PAUSE' : 'PLAY'}</button>
+                <button className="li-ctrl" title="Next (N)" onClick={handleNext}>NEXT</button>
+                <button className="li-ctrl" title="Repeat (R)" onClick={cycleRepeat}>REP:{settings.repeat.toUpperCase()}</button>
+                <button className={`li-ctrl ${settings.muted ? 'is-alert' : ''}`} title="Mute (M)" onClick={() => setSettings(s => ({ ...s, muted: !s.muted }))}>{settings.muted ? 'MUTE' : 'VOL'}</button>
+                <div className="li-spacer" />
+                <input className="li-range li-vol" type="range" min={0} max={100} value={Math.round(settings.volume * 100)} onChange={e => setSettings(s => ({ ...s, volume: Number(e.target.value) / 100 }))} aria-label="Volume" />
+                <span className="li-time">{Math.round(settings.volume * 100)}%</span>
+              </div>
+            </div>
+          </main>
+        </div>
+
+        <div className="li-status">
+          <span className="li-status__dot" />
+          <span>{status}</span>
+          <span className="li-status__right">MODE: {settings.vizMode.toUpperCase()} // {ready ? 'ARCHIVE READY' : 'LOADING...'}</span>
+        </div>
+      </div>
+
+      <div className="li-fx li-fx--scan" aria-hidden="true" />
+      <div className="li-fx li-fx--grain" aria-hidden="true" />
+
+      {popups.map(p => (
+        <div
+          key={p.id}
+          className="li-popup"
+          style={{ left: p.x, top: p.y, width: POPUP_WIDTH[p.kind], zIndex: p.z }}
+          onMouseDown={() => setPopups(prev => prev.map(x => x.id === p.id ? { ...x, z: ++zRef.current } : x))}
+        >
+          <div className="li-popup__title" onMouseDown={e => startDrag(e, p)} onDoubleClick={() => setPopups(prev => prev.filter(x => x.id !== p.id))}>
+            <span>{p.title}</span>
+            <button className="li-popup__close" onClick={() => setPopups(prev => prev.filter(x => x.id !== p.id))}>X</button>
+          </div>
+          <div className="li-popup__body">
+            {p.kind === 'ie' && <IePopupBody calm={settings.calm || reducedMotion} />}
+            {p.kind === 'favorites' && (
+              <div className="li-popup__links">
+                <button className="li-popup__link" onClick={() => notify('about:blank // nothing here')}>about:blank</button>
+                <button className="li-popup__link" onClick={() => notify('dreams:// connection refused')}>dreams://</button>
+                <button className="li-popup__link" onClick={() => notify('forever.exe is not responding')}>forever.exe</button>
+                <button className="li-popup__link" onClick={() => notify('lost://archive mounted locally')}>lost://archive</button>
+              </div>
+            )}
+            {p.kind === 'about' && (
+              <div className="li-popup__about">
+                <strong>LOST INTERNET</strong><br /><br />
+                Dark Webcore / Y2K local music player.<br />
+                React + Web Audio + IndexedDB.<br /><br />
+                <span>music is the only real thing.</span>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+
+      {toast && <div className="li-toast" role="status">{toast}</div>}
+      <audio ref={audioRef} preload="metadata" />
+    </div>
+  )
+}
+
+function IePopupBody({ calm }: { calm: boolean }) {
+  const [value, setValue] = useState(calm ? 43 : 0)
+  useEffect(() => {
+    if (calm) return
+    const timer = window.setInterval(() => setValue(v => (v >= 100 ? 100 : v + 7)), 220)
+    return () => window.clearInterval(timer)
+  }, [calm])
+  return (
+    <div className="li-ie">
+      <div>{value >= 100 ? 'Connection lost. Try again later.' : 'Loading happiness...'}</div>
+      <div className="li-popup__bar"><div className="li-popup__fill" style={{ width: `${value}%` }} /></div>
+      <button className="li-btn" onClick={() => setValue(100)}>{value >= 100 ? 'Close' : 'Cancel'}</button>
+    </div>
+  )
+}
