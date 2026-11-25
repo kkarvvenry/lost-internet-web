@@ -838,8 +838,6 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     let gridH = 0
     let gridTheme = ''
     const gentle = reducedMotion || settings.calm
-    const calmFrameMs = 100
-    let lastDraw = 0
     const draw = (time: number) => {
       const c = visRef.current
       if (!c || !ctx) return
@@ -956,10 +954,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       ctx.textAlign = 'left'
     }
     const loop = (time: number) => {
-      if (!document.hidden && (!gentle || time - lastDraw >= calmFrameMs)) {
-        lastDraw = time
-        draw(time)
-      }
+      if (!document.hidden) draw(time)
       rafRef.current = requestAnimationFrame(loop)
     }
     const onResize = () => draw(performance.now())
