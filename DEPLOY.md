@@ -22,6 +22,7 @@ https://lost-internet-web.stepanb249.workers.dev
 - `public/_headers`, `manifest.webmanifest`, `icon.svg` и `sw.js` автоматически копируются в `dist/`; SPA-fallback включён через `not_found_handling: single-page-application`;
 - `wrangler.jsonc` настроен на деплой `dist/`, Worker `src/worker.ts` и D1-базу `lost-internet-catalog`;
 - `migrations/0001_init.sql` создаёт таблицу `catalog_tracks`;
+- `migrations/0002_like_hits.sql` добавляет таблицу `catalog_like_hits` для защиты от спама лайками;
 - API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`;

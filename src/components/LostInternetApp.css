@@ -1169,6 +1169,7 @@ body {
   color: var(--li-white);
   cursor: move;
   user-select: none;
+  touch-action: none;
   font-size: 12px;
   font-weight: bold;
 }

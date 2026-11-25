@@ -70,6 +70,7 @@ cloudflared tunnel --url http://localhost:5173
 - `src/components/LostInternetApp.css` — стили;
 - `src/worker.ts` — Cloudflare Worker с API `/api/health`, `/api/catalog`, `/api/catalog/:id/like`;
 - `migrations/0001_init.sql` — схема D1 для общего каталога;
+- `migrations/0002_like_hits.sql` — защита от повторных лайков с одного адреса в сутки;
 - `wrangler.jsonc` — деплой и привязка D1;
 - `server/index.mjs` — Express-сервер для dev/prod раздачи.
 

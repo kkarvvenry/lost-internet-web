@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
@@ -141,17 +141,24 @@ function parseName(fileName: string) {
   return { artist: 'unknown artist', title: base || 'unknown title' }
 }
 
+let dbPromise: Promise<IDBDatabase> | null = null
 function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VER)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains(STORE_TRACKS)) db.createObjectStore(STORE_TRACKS, { keyPath: 'id' })
-      if (!db.objectStoreNames.contains(STORE_META)) db.createObjectStore(STORE_META, { keyPath: 'key' })
-    }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-  })
+  if (!dbPromise) {
+    dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VER)
+      req.onupgradeneeded = () => {
+        const db = req.result
+        if (!db.objectStoreNames.contains(STORE_TRACKS)) db.createObjectStore(STORE_TRACKS, { keyPath: 'id' })
+        if (!db.objectStoreNames.contains(STORE_META)) db.createObjectStore(STORE_META, { keyPath: 'key' })
+      }
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => reject(req.error)
+    }).catch(error => {
+      dbPromise = null
+      throw error
+    })
+  }
+  return dbPromise
 }
 async function dbGetAll<T>(store: string): Promise<T[]> {
   const db = await openDb()
@@ -358,6 +365,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const folderRef = useRef<HTMLInputElement | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
+  const trebleRef = useRef<BiquadFilterNode | null>(null)
   const filtersRef = useRef<{ bass: BiquadFilterNode; mid: BiquadFilterNode; treble: BiquadFilterNode } | null>(null)
   const gainsRef = useRef<{ a: GainNode; b: GainNode } | null>(null)
   const masterGainRef = useRef<GainNode | null>(null)
@@ -366,13 +374,16 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const pendingIdRef = useRef<string | null>(null)
   const fadeRafRef = useRef<number | null>(null)
   const fadeLevelsRef = useRef<{ a: number; b: number }>({ a: 1, b: 0 })
+  const autoAdvanceRef = useRef<string | null>(null)
+  const catalogReqRef = useRef(0)
+  const dragDepthRef = useRef(0)
   const rafRef = useRef<number | null>(null)
   const levelsRef = useRef(new Float32Array(48))
-  const urlsRef = useRef<string[]>([])
+  const urlsRef = useRef<Map<string, string[]>>(new Map())
   const hydratedRef = useRef(false)
   const popupsSeededRef = useRef(false)
   const zRef = useRef(20)
-  const nextRef = useRef<() => void>(() => {})
+  const nextRef = useRef<(fromAuto?: boolean) => void>(() => {})
   const tracksRef = useRef(tracks)
   const currentIdRef = useRef(currentId)
   const settingsRef = useRef(settings)
@@ -421,6 +432,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       cancelAnimationFrame(fadeRafRef.current)
       fadeRafRef.current = null
     }
+    pendingIdRef.current = null
   }
   function setSlotLevel(slot: 'a' | 'b', level: number) {
     const value = clamp(level, 0, 1)
@@ -459,10 +471,16 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     }
     fadeRafRef.current = requestAnimationFrame(step)
   }
-  function makeUrl(blob: Blob) {
+  function makeUrl(blob: Blob, trackId: string) {
     const url = URL.createObjectURL(blob)
-    urlsRef.current.push(url)
+    const list = urlsRef.current.get(trackId) ?? []
+    list.push(url)
+    urlsRef.current.set(trackId, list)
     return url
+  }
+  function revokeTrackUrls(trackId: string) {
+    for (const url of urlsRef.current.get(trackId) ?? []) URL.revokeObjectURL(url)
+    urlsRef.current.delete(trackId)
   }
   function notify(message: string) {
     setStatus(message)
@@ -491,7 +509,18 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         const savedSettings = meta.find(m => m.key === KEY_SETTINGS)?.value
         const savedPlaylists = meta.find(m => m.key === KEY_PLAYLISTS)?.value
         const lastTrack = meta.find(m => m.key === KEY_LAST_TRACK)?.value
-        if (savedSettings) setSettings({ ...DEFAULT_SETTINGS, ...savedSettings })
+        if (savedSettings) {
+          const savedEq = savedSettings.eq ?? {}
+          setSettings({
+            ...DEFAULT_SETTINGS,
+            ...savedSettings,
+            eq: {
+              bass: Number(savedEq.bass ?? DEFAULT_SETTINGS.eq.bass) || 0,
+              mid: Number(savedEq.mid ?? DEFAULT_SETTINGS.eq.mid) || 0,
+              treble: Number(savedEq.treble ?? DEFAULT_SETTINGS.eq.treble) || 0,
+            },
+          })
+        }
         if (Array.isArray(savedPlaylists) && savedPlaylists.length) {
           setPlaylists(savedPlaylists)
           setSelectedPlaylistId(savedPlaylists[0].id)
@@ -499,8 +528,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         const stored = await dbGetAll<any>(STORE_TRACKS)
         const hydrated: Track[] = stored.map(t => ({
           ...t,
-          url: t.blob ? makeUrl(t.blob) : t.url,
-          artUrl: t.artBlob ? makeUrl(t.artBlob) : undefined,
+          url: t.blob ? makeUrl(t.blob, t.id) : t.url,
+          artUrl: t.artBlob ? makeUrl(t.artBlob, t.id) : undefined,
           plays: Number(t.plays ?? 0),
           lastPlayed: Number(t.lastPlayed ?? 0),
         }))
@@ -517,9 +546,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
 
   useEffect(() => {
     if (!ready) return
-    void dbPut(STORE_META, { key: KEY_SETTINGS, value: settings })
-    void dbPut(STORE_META, { key: KEY_PLAYLISTS, value: playlists })
-    if (currentId) void dbPut(STORE_META, { key: KEY_LAST_TRACK, value: currentId })
+    void dbPut(STORE_META, { key: KEY_SETTINGS, value: settings }).catch(() => {})
+    void dbPut(STORE_META, { key: KEY_PLAYLISTS, value: playlists }).catch(() => {})
+    if (currentId) void dbPut(STORE_META, { key: KEY_LAST_TRACK, value: currentId }).catch(() => {})
   }, [ready, settings, playlists, currentId])
 
   useEffect(() => {
@@ -539,7 +568,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     const level = settings.muted ? 0 : settings.volume * gain
     const master = masterGainRef.current
     if (master) {
-      master.gain.value = level
+      master.gain.value = clamp(level, 0, 1)
       for (const el of [audioRef.current, nextAudioRef.current]) {
         if (el) { el.volume = 1; el.muted = false }
       }
@@ -563,10 +592,20 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
 
   useEffect(() => {
     const compressor = compressorRef.current
-    if (!compressor) return
-    compressor.threshold.value = settings.compressor ? settings.compressorThreshold : 0
-    compressor.knee.value = settings.compressor ? 12 : 0
-    compressor.ratio.value = settings.compressor ? settings.compressorRatio : 1
+    const treble = trebleRef.current
+    const analyser = analyserRef.current
+    if (!compressor || !treble || !analyser) return
+    compressor.threshold.value = settings.compressorThreshold
+    compressor.knee.value = 12
+    compressor.ratio.value = settings.compressorRatio
+    try { treble.disconnect() } catch { /* no output yet */ }
+    try { compressor.disconnect() } catch { /* no output yet */ }
+    if (settings.compressor) {
+      treble.connect(compressor)
+      compressor.connect(analyser)
+    } else {
+      treble.connect(analyser)
+    }
   }, [settings.compressor, settings.compressorThreshold, settings.compressorRatio])
 
   useEffect(() => {
@@ -576,6 +615,16 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       const el = event.currentTarget as HTMLAudioElement
       if (!isActive(el)) return
       setProgress(el.currentTime * 1000)
+      const trackId = pendingIdRef.current || currentIdRef.current
+      if (autoAdvanceRef.current && autoAdvanceRef.current !== trackId) autoAdvanceRef.current = null
+      const s = settingsRef.current
+      if (!s.crossfade || !trackId || autoAdvanceRef.current === trackId) return
+      if (!Number.isFinite(el.duration) || el.duration <= 0) return
+      const remaining = (el.duration - el.currentTime) * 1000
+      if (remaining > 0 && remaining <= Math.max(200, s.crossfadeMs)) {
+        autoAdvanceRef.current = trackId
+        nextRef.current(true)
+      }
     }
     const onPlay = (event: Event) => {
       if (isActive(event.currentTarget as HTMLAudioElement)) setPlaying(true)
@@ -585,7 +634,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     }
     const onEnded = (event: Event) => {
       const el = event.currentTarget as HTMLAudioElement
-      if (isActive(el)) nextRef.current()
+      if (!isActive(el)) return
+      if (autoAdvanceRef.current === currentIdRef.current) return
+      nextRef.current()
     }
     const onLoaded = (event: Event) => {
       const el = event.currentTarget as HTMLAudioElement
@@ -603,7 +654,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           bitrate: t.bitrate || Math.round((t.size * 8) / (d / 1000) / 1000),
         }
         setTracks(prev => prev.map(x => x.id === updated.id ? updated : x))
-        void persistTrack(updated)
+        void persistTrack(updated).catch(() => {})
       }
     }
     const onError = (event: Event) => {
@@ -631,24 +682,30 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.altKey) return
+      const target = e.target as HTMLElement | null
+      const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || Boolean(target?.isContentEditable)
       const key = e.key.toLowerCase()
+      const mod = e.ctrlKey || e.metaKey
+      if (mod || e.altKey) {
+        if (e.key === 'ArrowRight') { e.preventDefault(); handleNext() }
+        else if (e.key === 'ArrowLeft') { e.preventDefault(); handlePrev() }
+        else if (key === 'f' && !e.altKey) { e.preventDefault(); setSection('library'); document.querySelector<HTMLInputElement>('.li-search')?.focus() }
+        else if (key === 'o' && !e.altKey) { e.preventDefault(); fileRef.current?.click() }
+        return
+      }
+      if (typing) return
+      if (target?.closest('button, a, select')) return
       if (e.code === 'Space') { e.preventDefault(); togglePlay() }
-      if (e.ctrlKey && e.key === 'ArrowRight') { e.preventDefault(); handleNext() }
-      if (e.ctrlKey && e.key === 'ArrowLeft') { e.preventDefault(); handlePrev() }
-      if (e.ctrlKey && key === 'f') { e.preventDefault(); setSection('library'); document.querySelector<HTMLInputElement>('.li-search')?.focus() }
-      if (e.ctrlKey && key === 'o') { e.preventDefault(); fileRef.current?.click() }
-      if (key === 'm') setSettings(s => ({ ...s, muted: !s.muted }))
-      if (key === 'n') handleNext()
-      if (key === 'p') handlePrev()
-      if (key === 's') setSettings(s => ({ ...s, shuffle: !s.shuffle }))
-      if (key === 'r') cycleRepeat()
-      if (key === 'f' && current) toggleFavorite(current.id)
-      if (key === '[' || key === ']') setSettings(s => ({ ...s, volume: clamp(s.volume + (key === '[' ? -0.05 : 0.05), 0, 1) }))
-      if (key === 'h') openPopup('help')
-      if (['1', '2', '3', '4'].includes(key)) setSettings(s => ({ ...s, vizMode: key === '1' ? 'spectrum' : key === '2' ? 'globe' : key === '3' ? 'hybrid' : 'scope' }))
-      if (e.key === 'Escape') { setOpenMenu(null); setPopups([]) }
+      else if (key === 'm') setSettings(s => ({ ...s, muted: !s.muted }))
+      else if (key === 'n') handleNext()
+      else if (key === 'p') handlePrev()
+      else if (key === 's') setSettings(s => ({ ...s, shuffle: !s.shuffle }))
+      else if (key === 'r') cycleRepeat()
+      else if (key === 'f' && current) toggleFavorite(current.id)
+      else if (key === '[' || key === ']') setSettings(s => ({ ...s, volume: clamp(s.volume + (key === '[' ? -0.05 : 0.05), 0, 1) }))
+      else if (key === 'h') openPopup('help')
+      else if (['1', '2', '3', '4'].includes(key)) setSettings(s => ({ ...s, vizMode: key === '1' ? 'spectrum' : key === '2' ? 'globe' : key === '3' ? 'hybrid' : 'scope' }))
+      else if (e.key === 'Escape') { setOpenMenu(null); setPopups([]) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -663,10 +720,16 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }, [])
 
   useEffect(() => {
-    if (!currentId || !settings.glitch || settings.calm || reducedMotion) return
+    if (!currentId || !settings.glitch || settings.calm || reducedMotion) {
+      setGlitchActive(false)
+      return
+    }
     setGlitchActive(true)
     const timer = window.setTimeout(() => setGlitchActive(false), 170)
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      setGlitchActive(false)
+    }
   }, [currentId, settings.glitch, settings.calm, reducedMotion])
 
   useEffect(() => {
@@ -676,11 +739,24 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   useEffect(() => {
     if (!ready || popupsSeededRef.current || !settings.showPopups) return
     popupsSeededRef.current = true
+    const ie = clampPopupPos('ie', 520, 86)
+    const favorites = clampPopupPos('favorites', 560, 292)
     setPopups([
-      { id: uid(), kind: 'ie', title: POPUP_TITLE.ie, x: 520, y: 86, z: 21 },
-      { id: uid(), kind: 'favorites', title: POPUP_TITLE.favorites, x: 560, y: 292, z: 22 },
+      { id: uid(), kind: 'ie', title: POPUP_TITLE.ie, x: ie.x, y: ie.y, z: 21 },
+      { id: uid(), kind: 'favorites', title: POPUP_TITLE.favorites, x: favorites.x, y: favorites.y, z: 22 },
     ])
   }, [ready, settings.showPopups])
+
+  useEffect(() => {
+    const onResize = () => {
+      setPopups(prev => prev.map(p => {
+        const pos = clampPopupPos(p.kind, p.x, p.y)
+        return { ...p, x: pos.x, y: pos.y }
+      }))
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   useEffect(() => {
     const canvas = visRef.current
@@ -775,7 +851,10 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
   }, [playing, reducedMotion, settings.calm, settings.vizMode, settings.vizSensitivity])
 
-  useEffect(() => () => { for (const url of urlsRef.current) URL.revokeObjectURL(url) }, [])
+  useEffect(() => () => {
+    for (const list of urlsRef.current.values()) for (const url of list) URL.revokeObjectURL(url)
+    urlsRef.current.clear()
+  }, [])
 
   function ensureAudioContext() {
     const audio = audioRef.current
@@ -784,6 +863,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     const Ctx = window.AudioContext || (window as any).webkitAudioContext
     if (!Ctx) return
     const context: AudioContext = new Ctx()
+    audioCtxRef.current = context
     const analyser = context.createAnalyser()
     analyser.fftSize = 512
     analyser.smoothingTimeConstant = 0.82
@@ -799,13 +879,13 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     treble.type = 'highshelf'
     treble.frequency.value = 5200
     const compressor = context.createDynamicsCompressor()
-    compressor.threshold.value = settingsRef.current.compressor ? settingsRef.current.compressorThreshold : 0
-    compressor.knee.value = settingsRef.current.compressor ? 12 : 0
-    compressor.ratio.value = settingsRef.current.compressor ? settingsRef.current.compressorRatio : 1
+    compressor.threshold.value = settingsRef.current.compressorThreshold
+    compressor.knee.value = 12
+    compressor.ratio.value = settingsRef.current.compressorRatio
     compressor.attack.value = 0.004
     compressor.release.value = 0.18
     const master = context.createGain()
-    master.gain.value = settingsRef.current.muted ? 0 : settingsRef.current.volume * dbToGain(settingsRef.current.makeup)
+    master.gain.value = settingsRef.current.muted ? 0 : clamp(settingsRef.current.volume * dbToGain(settingsRef.current.makeup), 0, 1)
 
     try {
       const sourceA = context.createMediaElementSource(audio)
@@ -820,8 +900,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       gainB.connect(bass)
       bass.connect(mid)
       mid.connect(treble)
-      treble.connect(compressor)
-      compressor.connect(analyser)
+      if (settingsRef.current.compressor) {
+        treble.connect(compressor)
+        compressor.connect(analyser)
+      } else {
+        treble.connect(analyser)
+      }
       analyser.connect(master)
       master.connect(context.destination)
       gainsRef.current = { a: gainA, b: gainB }
@@ -850,31 +934,44 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     const active = getActiveAudio()
     const other = getOtherAudio()
     if (!active || !other) { notify('Audio output is unavailable.'); return }
-    const canFade = allowFade && settingsRef.current.crossfade && !active.paused && currentIdRef.current !== id
+    const previousId = currentIdRef.current
+    const canFade = allowFade && settingsRef.current.crossfade && !active.paused && previousId !== id
+    const now = Date.now()
+    const updated: Track = { ...t, plays: (t.plays ?? 0) + 1, lastPlayed: now }
+    setTracks(prev => prev.map(x => x.id === id ? updated : x))
     setCurrentId(id)
     setSection('now')
     setProgress(0)
-    const now = Date.now()
-    setTracks(prev => prev.map(x => x.id === id ? { ...x, plays: (x.plays ?? 0) + 1, lastPlayed: now } : x))
-    window.setTimeout(() => { void persistTrackById(id) }, 0)
+    void persistTrack(updated).catch(() => {})
     ensureAudioContext()
     void audioCtxRef.current?.resume()
 
     if (canFade) {
       const from = activeSlotRef.current
       const to = from === 'a' ? 'b' : 'a'
+      const fadeMs = settingsRef.current.crossfadeMs
       stopFade()
       pendingIdRef.current = id
       activeSlotRef.current = to
       other.src = t.url
       other.currentTime = 0
       void other.play()
-        .then(() => notify(`Playing: ${t.artist} - ${t.name}`))
-        .catch(() => {
-          pendingIdRef.current = null
-          notify('Playback blocked by browser. Click PLAY again.')
+        .then(() => {
+          notify(`Playing: ${t.artist} - ${t.name}`)
+          if (activeSlotRef.current === to) fadeSlots(from, to, fadeMs)
         })
-      fadeSlots(from, to, settingsRef.current.crossfadeMs)
+        .catch(() => {
+          if (activeSlotRef.current === to) {
+            activeSlotRef.current = from
+            stopFade()
+            setSlotLevel(to, 0)
+            setSlotLevel(from, 1)
+            other.pause()
+            if (previousId) setCurrentId(previousId)
+            autoAdvanceRef.current = null
+            notify('Playback blocked by browser. Click PLAY again.')
+          }
+        })
       return
     }
 
@@ -917,7 +1014,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     if (!list.length) return
     const s = settingsRef.current
     const audio = getActiveAudio()
-    if (s.repeat === 'one' && audio) { audio.currentTime = 0; void audio.play().catch(() => {}); return }
+    if (s.repeat === 'one' && audio) {
+      autoAdvanceRef.current = null
+      audio.currentTime = 0
+      void audio.play().catch(() => notify('Playback blocked by browser.'))
+      return
+    }
     const index = list.findIndex(t => t.id === currentIdRef.current)
     let next = s.shuffle ? Math.floor(Math.random() * list.length) : index + 1
     if (!s.shuffle && next >= list.length) {
@@ -958,12 +1060,13 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       const name = id3.name || meta.title
       if (known.has(`${name}:${file.size}`)) continue
       known.add(`${name}:${file.size}`)
+      const id = uid()
       const track: Track = {
-        id: uid(),
+        id,
         blob: file,
         artBlob: id3.artBlob,
-        url: makeUrl(file),
-        artUrl: id3.artBlob ? makeUrl(id3.artBlob) : undefined,
+        url: makeUrl(file, id),
+        artUrl: id3.artBlob ? makeUrl(id3.artBlob, id) : undefined,
         name,
         artist: id3.artist || meta.artist,
         album: id3.album || 'local archive',
@@ -989,13 +1092,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     } else notify('No new audio files found.')
     setBusy(false)
   }
-  async function persistTrackById(id: string) {
-    const t = tracksRef.current.find(x => x.id === id)
-    if (t) await persistTrack(t).catch(() => {})
-  }
   function toggleFavorite(id: string) {
-    setTracks(prev => prev.map(t => t.id === id ? { ...t, favorite: !t.favorite } : t))
-    window.setTimeout(() => { void persistTrackById(id) }, 0)
+    const t = tracksRef.current.find(x => x.id === id)
+    if (!t) return
+    const updated: Track = { ...t, favorite: !t.favorite }
+    setTracks(prev => prev.map(x => x.id === id ? updated : x))
+    void persistTrack(updated).catch(() => {})
   }
   function editTrack(id: string) {
     const t = tracksRef.current.find(x => x.id === id)
@@ -1030,27 +1132,33 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     notify(`Saved: ${fileName}`)
   }
   async function loadCatalog() {
+    const req = ++catalogReqRef.current
+    const current = () => req === catalogReqRef.current
     setCatalogLoading(true)
+    const params = new URLSearchParams({ sort: catalogSort })
+    if (catalogQuery.trim()) params.set('q', catalogQuery.trim())
+
     try {
-      const params = new URLSearchParams({ sort: catalogSort })
-      if (catalogQuery.trim()) params.set('q', catalogQuery.trim())
-      const [listRes, statsRes] = await Promise.all([
-        fetch(`/api/catalog?${params.toString()}`),
-        fetch('/api/stats'),
-      ])
+      const listRes = await fetch(`/api/catalog?${params.toString()}`)
       if (!listRes.ok) throw new Error('catalog offline')
       const data = (await listRes.json()) as { tracks?: CatalogTrack[] }
-      setCatalog(data.tracks ?? [])
-      if (statsRes.ok) {
-        const stats = (await statsRes.json()) as { likes?: number }
-        setCatalogLikes(Number(stats.likes ?? 0))
-      }
+      if (current()) setCatalog(data.tracks ?? [])
     } catch {
-      setCatalog([])
-      setCatalogLikes(0)
-      notify('Network index unavailable.')
+      if (current()) {
+        setCatalog([])
+        notify('Network index unavailable.')
+      }
+    }
+
+    try {
+      const statsRes = await fetch('/api/stats')
+      if (!statsRes.ok) return
+      const stats = (await statsRes.json()) as { likes?: number }
+      if (current()) setCatalogLikes(Number(stats.likes ?? 0))
+    } catch {
+      if (current()) setCatalogLikes(0)
     } finally {
-      setCatalogLoading(false)
+      if (current()) setCatalogLoading(false)
     }
   }
   async function publishTrack(id: string) {
@@ -1079,8 +1187,14 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   async function likeCatalogTrack(id: string) {
     try {
       const res = await fetch(`/api/catalog/${encodeURIComponent(id)}/like`, { method: 'POST' })
+      const data = (await res.json().catch(() => ({}))) as { duplicate?: boolean }
       if (!res.ok) throw new Error('like failed')
+      if (data.duplicate) {
+        notify('Already liked today.')
+        return
+      }
       setCatalog(prev => prev.map(t => t.id === id ? { ...t, likes: t.likes + 1 } : t))
+      setCatalogLikes(prev => prev + 1)
     } catch {
       notify('Like failed. Network index unavailable.')
     }
@@ -1105,6 +1219,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       setPlaying(false)
     }
     await dbDelete(STORE_TRACKS, id).catch(() => {})
+    revokeTrackUrls(id)
     notify('Track removed from archive.')
   }
   async function clearArchive() {
@@ -1118,6 +1233,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     setPlaylists([{ id: 'p1', name: 'webcore', trackIds: [] }])
     setSelectedPlaylistId('p1')
     await dbClear(STORE_TRACKS).catch(() => {})
+    for (const t of tracksRef.current) revokeTrackUrls(t.id)
+    urlsRef.current.clear()
     notify('Archive cleared.')
   }
   function createPlaylist() {
@@ -1198,31 +1315,43 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     notify(`Playlist exported: ${pl.name}`)
   }
+  function clampPopupPos(kind: PopupKind, x: number, y: number) {
+    return {
+      x: clamp(x, 0, Math.max(0, window.innerWidth - POPUP_WIDTH[kind] - 8)),
+      y: clamp(y, 0, Math.max(0, window.innerHeight - 120)),
+    }
+  }
   function openPopup(kind: PopupKind) {
-    const x = kind === 'ie' ? 520 : kind === 'favorites' ? 560 : 420
-    const y = kind === 'ie' ? 86 : kind === 'favorites' ? 292 : 180
+    const rawX = kind === 'ie' ? 520 : kind === 'favorites' ? 560 : 420
+    const rawY = kind === 'ie' ? 86 : kind === 'favorites' ? 292 : 180
+    const pos = clampPopupPos(kind, rawX, rawY)
     setPopups(prev => {
       const existing = prev.find(p => p.kind === kind)
       if (existing) return prev.map(p => p.id === existing.id ? { ...p, z: ++zRef.current } : p)
-      return [...prev, { id: uid(), kind, title: POPUP_TITLE[kind], x, y, z: ++zRef.current }]
+      return [...prev, { id: uid(), kind, title: POPUP_TITLE[kind], x: pos.x, y: pos.y, z: ++zRef.current }]
     })
   }
-  function startDrag(e: MouseEvent<HTMLDivElement>, popup: Popup) {
+  function startDrag(e: ReactPointerEvent<HTMLDivElement>, popup: Popup) {
     e.preventDefault()
+    const target = e.currentTarget as HTMLElement
+    target.setPointerCapture?.(e.pointerId)
     const startX = e.clientX
     const startY = e.clientY
-    const width = POPUP_WIDTH[popup.kind]
-    const onMove = (ev: globalThis.MouseEvent) => {
-      const x = clamp(popup.x + ev.clientX - startX, 0, Math.max(0, window.innerWidth - width - 8))
-      const y = clamp(popup.y + ev.clientY - startY, 0, Math.max(0, window.innerHeight - 120))
-      setPopups(prev => prev.map(p => p.id === popup.id ? { ...p, x, y } : p))
+    const originX = popup.x
+    const originY = popup.y
+    const onMove = (ev: PointerEvent) => {
+      const pos = clampPopupPos(popup.kind, originX + ev.clientX - startX, originY + ev.clientY - startY)
+      setPopups(prev => prev.map(p => p.id === popup.id ? { ...p, x: pos.x, y: pos.y } : p))
     }
     const onUp = () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      target.releasePointerCapture?.(e.pointerId)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
   function onDrop(e: DragEvent) {
     e.preventDefault()
@@ -1570,10 +1699,18 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   return (
     <div
       className={rootClasses}
-      onDragEnter={e => { if (e.dataTransfer.types.includes('Files')) setDropActive(true) }}
+      onDragEnter={e => {
+        if (!e.dataTransfer.types.includes('Files')) return
+        dragDepthRef.current += 1
+        setDropActive(true)
+      }}
       onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' } }}
-      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropActive(false) }}
-      onDrop={onDrop}
+      onDragLeave={e => {
+        if (!e.dataTransfer.types.includes('Files')) return
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+        if (dragDepthRef.current === 0) setDropActive(false)
+      }}
+      onDrop={e => { dragDepthRef.current = 0; onDrop(e) }}
     >
       <div className="li-window">
         <div className="li-titlebar" onDoubleClick={() => void document.documentElement.requestFullscreen?.().catch(() => {})}>
@@ -1694,7 +1831,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           style={{ left: p.x, top: p.y, width: POPUP_WIDTH[p.kind], zIndex: p.z }}
           onMouseDown={() => setPopups(prev => prev.map(x => x.id === p.id ? { ...x, z: ++zRef.current } : x))}
         >
-          <div className="li-popup__title" onMouseDown={e => startDrag(e, p)} onDoubleClick={() => setPopups(prev => prev.filter(x => x.id !== p.id))}>
+          <div className="li-popup__title" onPointerDown={e => startDrag(e, p)} onDoubleClick={() => setPopups(prev => prev.filter(x => x.id !== p.id))}>
             <span>{p.title}</span>
             <button className="li-popup__close" onClick={() => setPopups(prev => prev.filter(x => x.id !== p.id))}>X</button>
           </div>

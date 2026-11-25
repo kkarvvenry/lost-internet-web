@@ -12,8 +12,6 @@
   },
   "dependencies": {
     "express": "^4.21.2",
-    "framer-motion": "^14.14.0",
-    "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

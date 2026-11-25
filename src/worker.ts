@@ -15,6 +15,8 @@ function json(data: unknown, status = 200): Response {
       ...CORS,
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
     },
   })
 }
@@ -66,7 +68,14 @@ export default {
       }
 
       if (url.pathname === '/api/catalog' && request.method === 'POST') {
-        const body = (await request.json()) as Record<string, unknown>
+        const raw = await request.text()
+        if (raw.length > 8192) return json({ error: 'payload too large' }, 413)
+        let body: Record<string, unknown>
+        try {
+          body = JSON.parse(raw) as Record<string, unknown>
+        } catch {
+          return json({ error: 'invalid JSON' }, 400)
+        }
         const title = clean(body.title, 180)
         if (!title) return json({ error: 'title is required' }, 400)
 
@@ -88,9 +97,27 @@ export default {
 
       const likeMatch = url.pathname.match(/^\/api\/catalog\/([^/]+)\/like$/)
       if (likeMatch && request.method === 'POST') {
+        const trackId = likeMatch[1]
+        const ip = request.headers.get('CF-Connecting-IP')
+          || request.headers.get('x-forwarded-for')
+          || 'local'
+        const day = Math.floor(Date.now() / 86400000)
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip))
+        const ipHash = Array.from(new Uint8Array(digest))
+          .map(byte => byte.toString(16).padStart(2, '0'))
+          .join('')
+        const hitKey = `${trackId}:${ipHash}:${day}`
+        const existing = await env.lost_internet_catalog.prepare(
+          'SELECT 1 FROM catalog_like_hits WHERE hit_key = ?'
+        ).bind(hitKey).first()
+        if (existing) return json({ ok: true, duplicate: true })
+
         await env.lost_internet_catalog.prepare(
           'UPDATE catalog_tracks SET likes = likes + 1 WHERE id = ?'
-        ).bind(likeMatch[1]).run()
+        ).bind(trackId).run()
+        await env.lost_internet_catalog.prepare(
+          'INSERT OR IGNORE INTO catalog_like_hits (hit_key, track_id, ip_hash, day, created_at) VALUES (?, ?, ?, ?, ?)'
+        ).bind(hitKey, trackId, ipHash, day, Date.now()).run()
         return json({ ok: true })
       }
 
