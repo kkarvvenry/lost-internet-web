@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent
 import { uid, fmt, fmtBytes, clamp, dbToGain, parseName } from '../lib/format'
 import { VIRTUALIZE_THRESHOLD, tableWindow } from '../lib/table'
 import { translate, type Language } from '../lib/i18n'
+import { PROVIDERS, buildSearchQuery, buildSearchUrl, isProviderId, normalizeServiceUrl, sanitizeLinks, type ProviderId, type TrackLinks } from '../lib/links'
 import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
@@ -10,7 +11,7 @@ type EqPreset = 'flat' | 'bass' | 'vocal' | 'night' | 'custom'
 type Section = 'now' | 'playlist' | 'library' | 'radio' | 'settings' | 'archive' | 'recent' | 'network' | 'favorites' | 'unknown'
 type SortField = 'name' | 'artist' | 'album' | 'duration' | 'plays' | 'addedAt' | 'lastPlayed'
 type MenuKind = 'file' | 'view' | 'playback' | 'help'
-type PopupKind = 'ie' | 'favorites' | 'about' | 'help'
+type PopupKind = 'ie' | 'favorites' | 'about' | 'help' | 'links'
 type Settings = {
   volume: number
   muted: boolean
@@ -33,6 +34,7 @@ type Settings = {
   showPopups: boolean
   theme: 'dark' | 'light'
   language: Language
+  defaultProvider: ProviderId
 }
 type Track = {
   id: string
@@ -53,6 +55,7 @@ type Track = {
   plays: number
   lastPlayed: number
   addedAt: number
+  links?: TrackLinks
 }
 type Playlist = { id: string; name: string; trackIds: string[] }
 type CatalogTrack = {
@@ -98,6 +101,7 @@ const DEFAULT_SETTINGS: Settings = {
   showPopups: true,
   theme: 'dark',
   language: 'en',
+  defaultProvider: 'yandex',
 }
 const EQ_PRESETS: Record<EqPreset, { bass: number; mid: number; treble: number }> = {
   flat: { bass: 0, mid: 0, treble: 0 },
@@ -126,13 +130,15 @@ const MENUS: Array<{ id: MenuKind; label: string }> = [
   { id: 'playback', label: 'Playback' },
   { id: 'help', label: 'Help' },
 ]
-const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320, help: 420 }
-const POPUP_HEIGHT: Record<PopupKind, number> = { ie: 150, favorites: 180, about: 200, help: 440 }
+const EMPTY_LINKS: TrackLinks = {}
+const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320, help: 420, links: 440 }
+const POPUP_HEIGHT: Record<PopupKind, number> = { ie: 150, favorites: 180, about: 200, help: 440, links: 480 }
 const POPUP_TITLE: Record<PopupKind, string> = {
   ie: 'Internet Explorer',
   favorites: '★ Favorites',
   about: 'about_lost_internet.txt',
   help: 'keys.txt',
+  links: 'links.txt',
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null
@@ -367,6 +373,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [progress, setProgress] = useState(0)
   const [duration, setDuration] = useState(0)
   const [popups, setPopups] = useState<Popup[]>([])
+  const [linksTarget, setLinksTarget] = useState<{ id?: string; query: string } | null>(null)
   const [openMenu, setOpenMenu] = useState<MenuKind | null>(null)
   const [status, setStatus] = useState('Ready. Drop into the archive.')
   const [toast, setToast] = useState('')
@@ -608,6 +615,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
             },
             theme: savedSettings.theme === 'light' ? 'light' : 'dark',
             language: savedSettings.language === 'ru' ? 'ru' : 'en',
+            defaultProvider: isProviderId(savedSettings.defaultProvider) ? savedSettings.defaultProvider : 'yandex',
           })
         }
         if (Array.isArray(savedPlaylists) && savedPlaylists.length) {
@@ -1403,6 +1411,31 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     void persistTrack(updated).catch(() => warnStorage('Metadata could not be saved.'))
     notify('Metadata updated.')
   }
+  function openLinks(id?: string, query?: string) {
+    const track = id ? tracksRef.current.find(x => x.id === id) : undefined
+    if (id && !track) return
+    setLinksTarget({ id: track?.id, query: query ?? (track ? buildSearchQuery(track.artist, track.name) : '') })
+    openPopup('links')
+  }
+  function saveTrackLink(provider: ProviderId, raw: string) {
+    const id = linksTarget?.id
+    if (!id) return
+    const track = tracksRef.current.find(x => x.id === id)
+    if (!track) return
+    const normalized = normalizeServiceUrl(provider, raw)
+    if (!normalized && raw.trim()) {
+      notify(tr('Invalid link for this service.'))
+      return
+    }
+    const nextLinks: TrackLinks = { ...(track.links ?? {}) }
+    if (normalized) nextLinks[provider] = normalized
+    else delete nextLinks[provider]
+    const updated: Track = { ...track, links: Object.keys(nextLinks).length ? nextLinks : undefined }
+    setTracks(prev => prev.map(x => x.id === id ? updated : x))
+    tracksRef.current = tracksRef.current.map(x => x.id === id ? updated : x)
+    void persistTrack(updated).catch(() => warnStorage('Link could not be saved.'))
+    notify(normalized ? tr('Link saved.') : tr('Link removed.'))
+  }
   function downloadTrack(id: string) {
     const t = tracksRef.current.find(x => x.id === id)
     if (!t) return
@@ -1648,6 +1681,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           plays: Number(raw.plays ?? 0),
           lastPlayed: Number(raw.lastPlayed ?? 0),
           addedAt: Number(raw.addedAt ?? Date.now()),
+          links: sanitizeLinks(raw.links),
         })
       }
       const nextTracks = [...restored, ...existing]
@@ -1671,6 +1705,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           eq: { ...DEFAULT_SETTINGS.eq, ...(saved.eq ?? {}) },
           theme: saved.theme === 'light' ? 'light' : 'dark',
           language: saved.language === 'ru' ? 'ru' : 'en',
+          defaultProvider: isProviderId(saved.defaultProvider) ? saved.defaultProvider : 'yandex',
         })
       }
       let failed = 0
@@ -1815,6 +1850,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 <td>
                   <button className="li-btn li-btn--tiny" title="Favorite" aria-label={`Favorite ${t.name}`} onClick={() => toggleFavorite(t.id)}>{t.favorite ? '★' : '☆'}</button>
                   <button className="li-btn li-btn--tiny" title="Edit metadata" aria-label={`Edit ${t.name}`} onClick={() => editTrack(t.id)}>EDIT</button>
+                  <button className="li-btn li-btn--tiny" title={tr('Service links')} aria-label={`${tr('Service links')}: ${t.name}`} onClick={() => openLinks(t.id)}>WEB</button>
                   <button className="li-btn li-btn--tiny" title="Download original file" aria-label={`Download ${t.name}`} onClick={() => downloadTrack(t.id)}>DL</button>
                   <button className="li-btn li-btn--tiny" title="Publish metadata to public index" aria-label={`Publish ${t.name}`} onClick={() => { void publishTrack(t.id) }}>PUB</button>
                   <button className="li-btn li-btn--tiny" title="Add to playlist" aria-label={`Add ${t.name} to playlist`} onClick={() => addToPlaylist(t.id)}>+PL</button>
@@ -1965,6 +2001,16 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           </div>
         </section>
         <section className="li-settings__group">
+          <h3>{tr('// INTEGRATIONS')}</h3>
+          <label className="li-setting-row">
+            <span>{tr('DEFAULT SEARCH')}</span>
+            <select className="li-select" value={settings.defaultProvider} onChange={e => setSettings(s => ({ ...s, defaultProvider: e.target.value as ProviderId }))}>
+              {PROVIDERS.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+            </select>
+          </label>
+          <p>{tr('Links are stored locally. No audio is uploaded to these services.')}</p>
+        </section>
+        <section className="li-settings__group">
           <h3>{tr('// ATMOSPHERE')}</h3>
           {([
             ['scanlines', 'CRT SCANLINES'],
@@ -2063,6 +2109,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               <span>{item.likes}</span>
               <span>
                 <button className="li-btn li-btn--tiny" title="Play if you have the local file" aria-label={`Play ${item.title} from local archive`} onClick={() => playCatalogTrack(item)}>PLAY</button>
+                <button className="li-btn li-btn--tiny" title={tr('Service links')} aria-label={`${tr('Service links')}: ${item.title}`} onClick={() => openLinks(undefined, buildSearchQuery(item.artist, item.title))}>WEB</button>
                 <button
                   className="li-btn li-btn--tiny"
                   title="Like"
@@ -2149,6 +2196,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     busy ? 'is-busy' : '',
   ].filter(Boolean).join(' ')
   const topPopupId = popups.length ? popups.reduce((best, p) => p.z > best.z ? p : best).id : null
+  const linkTrack = linksTarget?.id ? tracks.find(t => t.id === linksTarget.id) : undefined
   const marqueeText = `${tr('WELCOME TO LOST INTERNET')} // ${tr('VISITORS: 000001337')} // ${tr('LOCAL FILES')}: ${tracks.length} // ${tr('PUBLIC INDEX')}: ${catalog.length} ${tr('ENTRIES')} // ${tr('MUSIC IS THE ONLY REAL THING')} // `
 
   return (
@@ -2332,6 +2380,17 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               </div>
             )}
             {p.kind === 'help' && <HelpPopupBody tr={tr} />}
+            {p.kind === 'links' && linksTarget && (
+              <LinksPopupBody
+                key={linksTarget.id ?? linksTarget.query}
+                query={linksTarget.query}
+                links={linkTrack?.links ?? EMPTY_LINKS}
+                editable={Boolean(linksTarget.id)}
+                defaultProvider={settings.defaultProvider}
+                tr={tr}
+                onSave={saveTrackLink}
+              />
+            )}
           </div>
         </div>
       ))}
@@ -2408,6 +2467,59 @@ function HelpPopupBody({ tr }: { tr: (text: string) => string }) {
         </section>
       ))}
       <div className="li-help__foot">{tr('TAB // switch inside window  ESC // close')}</div>
+    </div>
+  )
+}
+
+function LinksPopupBody({ query, links, editable, defaultProvider, tr, onSave }: {
+  query: string
+  links: TrackLinks
+  editable: boolean
+  defaultProvider: ProviderId
+  tr: (text: string) => string
+  onSave: (provider: ProviderId, raw: string) => void
+}) {
+  const [drafts, setDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(PROVIDERS.map(provider => [provider.id, links[provider.id] ?? ''])),
+  )
+  useEffect(() => {
+    setDrafts(Object.fromEntries(PROVIDERS.map(provider => [provider.id, links[provider.id] ?? ''])))
+  }, [links])
+  const defaultUrl = buildSearchUrl(defaultProvider, query)
+  return (
+    <div className="li-links">
+      <div className="li-links__query">{tr('QUERY')}: {query || '-'}</div>
+      <a className="li-btn li-links__default" href={defaultUrl} target="_blank" rel="noopener noreferrer">
+        {tr('SEARCH IN')} {PROVIDERS.find(provider => provider.id === defaultProvider)?.label ?? ''}
+      </a>
+      {PROVIDERS.map(provider => {
+        const saved = links[provider.id]
+        const draft = drafts[provider.id] ?? ''
+        return (
+          <section className="li-links__row" key={provider.id}>
+            <div className="li-links__head">
+              <strong>{provider.label}</strong>
+              <a href={buildSearchUrl(provider.id, query)} target="_blank" rel="noopener noreferrer">{tr('SEARCH')}</a>
+              {saved && <a href={saved} target="_blank" rel="noopener noreferrer">{tr('OPEN')}</a>}
+            </div>
+            {editable && (
+              <div className="li-links__edit">
+                <input
+                  className="li-input"
+                  type="url"
+                  inputMode="url"
+                  placeholder="https://..."
+                  aria-label={`${provider.label} URL`}
+                  value={draft}
+                  onChange={e => setDrafts(prev => ({ ...prev, [provider.id]: e.target.value }))}
+                />
+                <button className="li-btn li-btn--tiny" onClick={() => onSave(provider.id, draft)}>{tr('SAVE')}</button>
+              </div>
+            )}
+          </section>
+        )
+      })}
+      {!editable && <p>{tr('Search links only for public entries. Save links on your local tracks in LIBRARY.')}</p>}
     </div>
   )
 }

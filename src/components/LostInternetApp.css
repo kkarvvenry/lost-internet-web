@@ -1383,6 +1383,69 @@ html[data-theme='light'] ::selection {
   overflow: auto;
 }
 
+.li-input,
+.li-select {
+  min-width: 0;
+  padding: 3px 5px;
+  border: 1px solid var(--li-muted);
+  border-radius: 0;
+  background: var(--li-panel);
+  color: var(--li-text);
+  font-size: 11px;
+}
+
+.li-select {
+  cursor: pointer;
+}
+
+.li-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.li-links__query {
+  color: var(--li-silver);
+  font-size: 11px;
+  word-break: break-word;
+}
+
+.li-links__default {
+  align-self: flex-start;
+  text-decoration: none;
+}
+
+.li-links__row {
+  border: 1px solid var(--li-border);
+  padding: 6px;
+}
+
+.li-links__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.li-links__head a {
+  color: var(--li-blue);
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+.li-links__edit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.li-links p {
+  margin: 0;
+  color: var(--li-silver);
+  font-size: 11px;
+}
+
 .li-ie {
   display: flex;
   flex-direction: column;
