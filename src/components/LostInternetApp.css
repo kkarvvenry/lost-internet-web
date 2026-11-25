@@ -1189,6 +1189,31 @@ body {
   color: var(--li-silver);
 }
 
+.li-help {
+  display: flex;
+  flex-direction: column;
+}
+
+.li-help__row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px;
+  padding: 4px 2px;
+  border-bottom: 1px solid var(--li-border);
+  font-size: 11px;
+}
+
+.li-help__row span:first-child {
+  color: var(--li-white);
+  background: var(--li-panel);
+  border: 1px solid var(--li-muted);
+  padding: 1px 4px;
+}
+
+.li-help__row span:last-child {
+  color: var(--li-silver);
+}
+
 .li-toast {
   position: fixed;
   right: 12px;

@@ -3,10 +3,10 @@ import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
 type VizMode = 'spectrum' | 'globe' | 'hybrid'
-type Section = 'now' | 'playlist' | 'library' | 'radio' | 'settings' | 'archive' | 'favorites' | 'unknown'
-type SortField = 'name' | 'artist' | 'album' | 'duration' | 'addedAt'
+type Section = 'now' | 'playlist' | 'library' | 'radio' | 'settings' | 'archive' | 'recent' | 'favorites' | 'unknown'
+type SortField = 'name' | 'artist' | 'album' | 'duration' | 'plays' | 'addedAt' | 'lastPlayed'
 type MenuKind = 'file' | 'view' | 'playback' | 'help'
-type PopupKind = 'ie' | 'favorites' | 'about'
+type PopupKind = 'ie' | 'favorites' | 'about' | 'help'
 type Settings = {
   volume: number
   muted: boolean
@@ -37,6 +37,7 @@ type Track = {
   sampleRate: number
   favorite: boolean
   plays: number
+  lastPlayed: number
   addedAt: number
 }
 type Playlist = { id: string; name: string; trackIds: string[] }
@@ -72,6 +73,7 @@ const SECTIONS: Array<{ id: Section; label: string }> = [
 ]
 const SECONDARY: Array<{ id: Section; label: string }> = [
   { id: 'archive', label: 'ARCHIVE' },
+  { id: 'recent', label: 'RECENT' },
   { id: 'favorites', label: 'FAVORITES' },
   { id: 'unknown', label: 'UNKNOWN' },
 ]
@@ -81,11 +83,12 @@ const MENUS: Array<{ id: MenuKind; label: string }> = [
   { id: 'playback', label: 'Playback' },
   { id: 'help', label: 'Help' },
 ]
-const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320 }
+const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320, help: 380 }
 const POPUP_TITLE: Record<PopupKind, string> = {
   ie: 'Internet Explorer',
   favorites: '★ Favorites',
   about: 'about_lost_internet.txt',
+  help: 'keys.txt',
 }
 
 function uid() { return Math.random().toString(36).slice(2, 11) }
@@ -335,18 +338,19 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     if (section === 'favorites') list = tracks.filter(t => t.favorite)
     if (section === 'unknown') list = tracks.filter(t => !t.artist || t.artist === 'unknown artist')
     if (section === 'archive') list = [...tracks].sort((a, b) => b.addedAt - a.addedAt)
+    if (section === 'recent') list = tracks.filter(t => t.lastPlayed > 0).sort((a, b) => b.lastPlayed - a.lastPlayed)
     if (section === 'playlist' && selectedPlaylistId) {
       const ids = new Set(playlists.find(p => p.id === selectedPlaylistId)?.trackIds ?? [])
       list = tracks.filter(t => ids.has(t.id))
     }
     if (section === 'radio') list = []
     if (q) list = list.filter(t => `${t.name} ${t.artist} ${t.album} ${t.genre}`.toLowerCase().includes(q))
-    if (section !== 'archive') {
+    if (section !== 'archive' && section !== 'recent') {
       const dir = sort.dir === 'asc' ? 1 : -1
       list = [...list].sort((a, b) => {
         const av = String(a[sort.field] ?? '')
         const bv = String(b[sort.field] ?? '')
-        if (sort.field === 'duration' || sort.field === 'addedAt') return (Number(a[sort.field]) - Number(b[sort.field])) * dir
+        if (['duration', 'plays', 'addedAt', 'lastPlayed'].includes(sort.field)) return (Number(a[sort.field]) - Number(b[sort.field])) * dir
         return av.localeCompare(bv) * dir
       })
     }
@@ -398,6 +402,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           url: t.blob ? makeUrl(t.blob) : t.url,
           artUrl: t.artBlob ? makeUrl(t.artBlob) : undefined,
           plays: Number(t.plays ?? 0),
+          lastPlayed: Number(t.lastPlayed ?? 0),
         }))
         setTracks(hydrated.sort((a, b) => Number(b.addedAt) - Number(a.addedAt)))
         if (lastTrack && hydrated.some(t => t.id === lastTrack)) setCurrentId(lastTrack)
@@ -483,6 +488,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       if (key === 'p') handlePrev()
       if (key === 's') setSettings(s => ({ ...s, shuffle: !s.shuffle }))
       if (key === 'r') cycleRepeat()
+      if (key === 'h') openPopup('help')
       if (['1', '2', '3'].includes(key)) setSettings(s => ({ ...s, vizMode: key === '1' ? 'spectrum' : key === '2' ? 'globe' : 'hybrid' }))
       if (e.key === 'Escape') { setOpenMenu(null); setPopups([]) }
     }
@@ -624,7 +630,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     setCurrentId(id)
     setSection('now')
     setProgress(0)
-    setTracks(prev => prev.map(x => x.id === id ? { ...x, plays: (x.plays ?? 0) + 1 } : x))
+    const now = Date.now()
+    setTracks(prev => prev.map(x => x.id === id ? { ...x, plays: (x.plays ?? 0) + 1, lastPlayed: now } : x))
     window.setTimeout(() => { void persistTrackById(id) }, 0)
     ensureAudioContext()
     audio.src = t.url
@@ -703,6 +710,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         sampleRate: wave.sampleRate,
         favorite: false,
         plays: 0,
+        lastPlayed: 0,
         addedAt: Date.now() + added.length,
       }
       added.push(track)
@@ -723,6 +731,38 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   function toggleFavorite(id: string) {
     setTracks(prev => prev.map(t => t.id === id ? { ...t, favorite: !t.favorite } : t))
     window.setTimeout(() => { void persistTrackById(id) }, 0)
+  }
+  function editTrack(id: string) {
+    const t = tracksRef.current.find(x => x.id === id)
+    if (!t) return
+    const name = window.prompt('Title', t.name)
+    if (name === null) return
+    const artist = window.prompt('Artist', t.artist)
+    if (artist === null) return
+    const album = window.prompt('Album', t.album)
+    if (album === null) return
+    const genre = window.prompt('Genre', t.genre)
+    if (genre === null) return
+    const updated: Track = {
+      ...t,
+      name: name.trim() || t.name,
+      artist: artist.trim() || 'unknown artist',
+      album: album.trim() || 'local archive',
+      genre: genre.trim(),
+    }
+    setTracks(prev => prev.map(x => x.id === id ? updated : x))
+    void persistTrack(updated).catch(() => {})
+    notify('Metadata updated.')
+  }
+  function downloadTrack(id: string) {
+    const t = tracksRef.current.find(x => x.id === id)
+    if (!t) return
+    const a = document.createElement('a')
+    a.href = t.url
+    const fileName = (t.blob as File | undefined)?.name || `${t.artist} - ${t.name}.${t.format.toLowerCase()}`
+    a.download = fileName
+    a.click()
+    notify(`Saved: ${fileName}`)
   }
   async function removeTrack(id: string) {
     if (!window.confirm('Remove this track from the local archive?')) return
@@ -851,6 +891,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               <th>{sortableHeader('artist', 'ARTIST')}</th>
               <th>{sortableHeader('album', 'ALBUM')}</th>
               <th>{sortableHeader('duration', 'TIME')}</th>
+              <th>{sortableHeader('plays', 'PLAYS')}</th>
               <th>ACTIONS</th>
             </tr>
           </thead>
@@ -867,8 +908,11 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 <td>{t.artist}</td>
                 <td>{t.album}</td>
                 <td>{t.duration ? fmt(t.duration) : '--:--'}</td>
+                <td>{t.plays ?? 0}</td>
                 <td>
                   <button className="li-btn li-btn--tiny" title="Favorite" onClick={() => toggleFavorite(t.id)}>{t.favorite ? '★' : '☆'}</button>
+                  <button className="li-btn li-btn--tiny" title="Edit metadata" onClick={() => editTrack(t.id)}>EDIT</button>
+                  <button className="li-btn li-btn--tiny" title="Download original file" onClick={() => downloadTrack(t.id)}>DL</button>
                   <button className="li-btn li-btn--tiny" title="Add to playlist" onClick={() => addToPlaylist(t.id)}>+PL</button>
                   {section === 'playlist' && (
                     <>
@@ -882,7 +926,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               </tr>
             ))}
             {visibleTracks.length === 0 && (
-              <tr><td colSpan={6} className="li-empty">No tracks. Use ADD FILES / ADD FOLDER or drop audio files here.</td></tr>
+              <tr><td colSpan={7} className="li-empty">No tracks. Use ADD FILES / ADD FOLDER or drop audio files here.</td></tr>
             )}
           </tbody>
         </table>
@@ -998,8 +1042,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       ],
       help: [
         { label: 'About', action: () => openPopup('about') },
+        { label: 'Keyboard Shortcuts', action: () => openPopup('help') },
         { label: 'Fake URLs', action: () => openPopup('favorites') },
-        { label: 'Keyboard: Space / N / P / M', action: () => notify('Space play, N next, P prev, M mute, S shuffle, R repeat') },
+        { label: 'Live URL', action: () => notify('lost-internet-web.stepanb249.workers.dev') },
       ],
     }
     return (
@@ -1180,6 +1225,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 <span>music is the only real thing.</span>
               </div>
             )}
+            {p.kind === 'help' && <HelpPopupBody />}
           </div>
         </div>
       ))}
@@ -1202,6 +1248,32 @@ function IePopupBody({ calm }: { calm: boolean }) {
       <div>{value >= 100 ? 'Connection lost. Try again later.' : 'Loading happiness...'}</div>
       <div className="li-popup__bar"><div className="li-popup__fill" style={{ width: `${value}%` }} /></div>
       <button className="li-btn" onClick={() => setValue(100)}>{value >= 100 ? 'Close' : 'Cancel'}</button>
+    </div>
+  )
+}
+
+function HelpPopupBody() {
+  const rows: Array<[string, string]> = [
+    ['SPACE', 'play / pause'],
+    ['N / P', 'next / previous'],
+    ['M', 'mute'],
+    ['S', 'shuffle'],
+    ['R', 'repeat off / all / one'],
+    ['1 / 2 / 3', 'visualizer mode'],
+    ['H', 'this help'],
+    ['CTRL+O', 'add files'],
+    ['CTRL+F', 'search library'],
+    ['CTRL+← / →', 'previous / next'],
+    ['ESC', 'close popups'],
+  ]
+  return (
+    <div className="li-help">
+      {rows.map(([key, label]) => (
+        <div className="li-help__row" key={key}>
+          <span>{key}</span>
+          <span>{label}</span>
+        </div>
+      ))}
     </div>
   )
 }

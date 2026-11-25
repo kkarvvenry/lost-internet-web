@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="LOST INTERNET">
+  <rect width="512" height="512" fill="#050505" />
+  <rect x="24" y="24" width="464" height="464" fill="none" stroke="#142B83" stroke-width="16" />
+  <path d="M256 40V472M40 256H472" stroke="#252525" stroke-width="8" />
+  <rect x="150" y="150" width="212" height="212" fill="#111111" stroke="#A5A5A5" stroke-width="8" />
+  <text x="256" y="238" font-family="Courier New, monospace" font-size="72" font-weight="bold" fill="#D6D6D6" text-anchor="middle">LI</text>
+  <rect x="150" y="300" width="212" height="28" fill="#790D18" />
+  <text x="256" y="321" font-family="Courier New, monospace" font-size="22" fill="#FFFFFF" text-anchor="middle">NO SIGNAL</text>
+  <rect x="150" y="356" width="212" height="6" fill="#555555" />
+</svg>

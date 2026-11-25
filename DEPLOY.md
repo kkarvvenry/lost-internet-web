@@ -19,7 +19,7 @@ https://lost-internet-web.stepanb249.workers.dev
 ### Что уже готово
 
 - `npm run build` создаёт `dist/`;
-- `public/_headers` автоматически копируется в `dist/`; SPA-fallback включён через `not_found_handling: single-page-application`;
+- `public/_headers`, `manifest.webmanifest`, `icon.svg` и `sw.js` автоматически копируются в `dist/`; SPA-fallback включён через `not_found_handling: single-page-application`;
 - `wrangler.jsonc` уже настроен на деплой `dist/`;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`;
