@@ -19,9 +19,10 @@ Dark Webcore / Y2K локальный музыкальный плеер с по�
 - визуализатор Web Audio: spectrum / globe / hybrid / scope, регулировка чувствительности;
 - общий публичный NETWORK-индекс метаданных на Cloudflare Worker + D1: публикация трека, лайки, поиск, сортировка NEW/TOP, статистика;
 - настройки атмосферы: scanlines, grain, glitch, calm mode, системные popup-окна;
+- смена темы DARK / LIGHT с плавным переходом, hotkey `T` и кнопкой в titlebar;
 - перетаскиваемые popup-окна Internet Explorer, Favorites, About, Help;
 - меню File / View / Playback / Help, экспорт метаданных, очистка архива;
-- горячие клавиши: Space, N, P, M, [ / ], F, S, R, H, 1/2/3/4, Ctrl+O, Ctrl+F, Ctrl+Left/Right, Esc;
+- горячие клавиши: Space, N, P, M, [ / ], F, S, R, H, T, 1/2/3/4, Ctrl+O, Ctrl+F, Ctrl+Left/Right, Esc;
 - сохранение файлов, обложек, плейлистов, настроек и последнего трека в IndexedDB;
 - PWA: установка на телефон/десктоп, иконка и офлайн-кэш оболочки приложения;
 - адаптивная компоновка, мобильный режим и уважение reduced motion.

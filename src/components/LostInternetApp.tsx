@@ -28,6 +28,7 @@ type Settings = {
   glitch: boolean
   calm: boolean
   showPopups: boolean
+  theme: 'dark' | 'light'
 }
 type Track = {
   id: string
@@ -91,6 +92,7 @@ const DEFAULT_SETTINGS: Settings = {
   glitch: true,
   calm: false,
   showPopups: true,
+  theme: 'dark',
 }
 const EQ_PRESETS: Record<EqPreset, { bass: number; mid: number; treble: number }> = {
   flat: { bass: 0, mid: 0, treble: 0 },
@@ -519,6 +521,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               mid: Number(savedEq.mid ?? DEFAULT_SETTINGS.eq.mid) || 0,
               treble: Number(savedEq.treble ?? DEFAULT_SETTINGS.eq.treble) || 0,
             },
+            theme: savedSettings.theme === 'light' ? 'light' : 'dark',
           })
         }
         if (Array.isArray(savedPlaylists) && savedPlaylists.length) {
@@ -704,6 +707,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       else if (key === 'f' && current) toggleFavorite(current.id)
       else if (key === '[' || key === ']') setSettings(s => ({ ...s, volume: clamp(s.volume + (key === '[' ? -0.05 : 0.05), 0, 1) }))
       else if (key === 'h') openPopup('help')
+      else if (key === 't') setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))
       else if (['1', '2', '3', '4'].includes(key)) setSettings(s => ({ ...s, vizMode: key === '1' ? 'spectrum' : key === '2' ? 'globe' : key === '3' ? 'hybrid' : 'scope' }))
       else if (e.key === 'Escape') { setOpenMenu(null); setPopups([]) }
     }
@@ -769,6 +773,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     let gridCtx: CanvasRenderingContext2D | null = null
     let gridW = 0
     let gridH = 0
+    let gridTheme = ''
     const draw = (time: number) => {
       const c = visRef.current
       if (!c || !ctx) return
@@ -788,23 +793,27 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       const analyser = analyserRef.current
       const el = activeSlotRef.current === 'a' ? audioRef.current : nextAudioRef.current
       const active = Boolean(analyser && el && !el.paused && !el.ended)
+      const light = s.theme === 'light'
+      const bg = light ? '#D6D6D6' : '#050505'
+      const gridColor = light ? '#555555' : '#252525'
 
       if (!grid) {
         grid = document.createElement('canvas')
         gridCtx = grid.getContext('2d')
       }
-      if (gridCtx && (gridW !== pixelW || gridH !== pixelH)) {
+      if (gridCtx && (gridW !== pixelW || gridH !== pixelH || gridTheme !== s.theme)) {
         grid!.width = pixelW
         grid!.height = pixelH
         gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
-        gridCtx.fillStyle = '#050505'
+        gridCtx.fillStyle = bg
         gridCtx.fillRect(0, 0, w, h)
-        gridCtx.strokeStyle = '#252525'
+        gridCtx.strokeStyle = gridColor
         gridCtx.lineWidth = 1
         for (let x = 0; x < w; x += 24) { gridCtx.beginPath(); gridCtx.moveTo(x, 0); gridCtx.lineTo(x, h); gridCtx.stroke() }
         for (let y = 0; y < h; y += 24) { gridCtx.beginPath(); gridCtx.moveTo(0, y); gridCtx.lineTo(w, y); gridCtx.stroke() }
         gridW = pixelW
         gridH = pixelH
+        gridTheme = s.theme
       }
       if (grid) ctx.drawImage(grid, 0, 0, w, h)
 
@@ -880,7 +889,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     }
     rafRef.current = requestAnimationFrame(loop)
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
-  }, [reducedMotion, settings.calm, settings.vizMode, settings.vizSensitivity])
+  }, [reducedMotion, settings.calm, settings.theme, settings.vizMode, settings.vizSensitivity])
 
   useEffect(() => () => {
     for (const list of urlsRef.current.values()) for (const url of list) URL.revokeObjectURL(url)
@@ -1558,6 +1567,14 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           </label>
         </section>
         <section className="li-settings__group">
+          <h3>// THEME</h3>
+          <div className="li-segmented">
+            {(['dark', 'light'] as const).map(theme => (
+              <button key={theme} className={settings.theme === theme ? 'is-active' : ''} onClick={() => setSettings(s => ({ ...s, theme }))}>{theme.toUpperCase()}</button>
+            ))}
+          </div>
+        </section>
+        <section className="li-settings__group">
           <h3>// ATMOSPHERE</h3>
           {([
             ['scanlines', 'CRT SCANLINES'],
@@ -1723,6 +1740,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     settings.scanlines && !settings.calm && !reducedMotion ? 'fx-scanlines' : '',
     settings.grain && !settings.calm && !reducedMotion ? 'fx-grain' : '',
     glitchActive ? 'is-glitch' : '',
+    settings.calm || reducedMotion ? 'is-calm' : '',
     dropActive ? 'is-drop' : '',
     busy ? 'is-busy' : '',
   ].filter(Boolean).join(' ')
@@ -1730,6 +1748,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   return (
     <div
       className={rootClasses}
+      data-theme={settings.theme}
       onDragEnter={e => {
         if (!e.dataTransfer.types.includes('Files')) return
         dragDepthRef.current += 1
@@ -1749,6 +1768,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <span className="li-titlebar__title">lost_internet.exe</span>
           <span className="li-titlebar__tag">v1.0 // LOCAL BUILD</span>
           <div className="li-titlebar__spacer" />
+          <button className="li-winbtn" title="Toggle theme (T)" onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}>◐</button>
           <button className="li-winbtn" title="Toggle sidebar" onClick={() => setSidebarCollapsed(v => !v)}>_</button>
           <button className="li-winbtn" title="Fullscreen" onClick={() => void document.documentElement.requestFullscreen?.().catch(() => {})}>□</button>
           <button className="li-winbtn li-winbtn--close" title="About" onClick={() => (onExit ? onExit() : openPopup('about'))}>X</button>
@@ -1923,6 +1943,7 @@ function HelpPopupBody() {
     ['R', 'repeat off / all / one'],
     ['1 / 2 / 3 / 4', 'visualizer mode'],
     ['H', 'this help'],
+    ['T', 'toggle theme'],
     ['CTRL+O', 'add files'],
     ['CTRL+F', 'search library'],
     ['CTRL+← / →', 'previous / next'],
