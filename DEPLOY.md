@@ -17,7 +17,7 @@ https://lost-internet-web.pages.dev
 ### Что уже готово
 
 - `npm run build` создаёт `dist/`;
-- `public/_headers` и `public/_redirects` автоматически копируются в `dist/`;
+- `public/_headers` автоматически копируется в `dist/`; SPA-fallback уже включён через `not_found_handling: single-page-application`;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`.
 
