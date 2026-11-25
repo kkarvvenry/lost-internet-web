@@ -763,6 +763,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    let freqData: Uint8Array<ArrayBuffer> | null = null
+    let waveData: Uint8Array<ArrayBuffer> | null = null
+    let grid: HTMLCanvasElement | null = null
+    let gridCtx: CanvasRenderingContext2D | null = null
+    let gridW = 0
+    let gridH = 0
     const draw = (time: number) => {
       const c = visRef.current
       if (!c || !ctx) return
@@ -782,17 +788,37 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       const analyser = analyserRef.current
       const el = activeSlotRef.current === 'a' ? audioRef.current : nextAudioRef.current
       const active = Boolean(analyser && el && !el.paused && !el.ended)
-      ctx.fillStyle = '#050505'
-      ctx.fillRect(0, 0, w, h)
-      ctx.strokeStyle = '#252525'
-      ctx.lineWidth = 1
-      for (let x = 0; x < w; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke() }
-      for (let y = 0; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
+
+      if (!grid) {
+        grid = document.createElement('canvas')
+        gridCtx = grid.getContext('2d')
+      }
+      if (gridCtx && (gridW !== pixelW || gridH !== pixelH)) {
+        grid!.width = pixelW
+        grid!.height = pixelH
+        gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        gridCtx.fillStyle = '#050505'
+        gridCtx.fillRect(0, 0, w, h)
+        gridCtx.strokeStyle = '#252525'
+        gridCtx.lineWidth = 1
+        for (let x = 0; x < w; x += 24) { gridCtx.beginPath(); gridCtx.moveTo(x, 0); gridCtx.lineTo(x, h); gridCtx.stroke() }
+        for (let y = 0; y < h; y += 24) { gridCtx.beginPath(); gridCtx.moveTo(0, y); gridCtx.lineTo(w, y); gridCtx.stroke() }
+        gridW = pixelW
+        gridH = pixelH
+      }
+      if (grid) ctx.drawImage(grid, 0, 0, w, h)
+
+      if (analyser) {
+        if (!freqData || freqData.length !== analyser.frequencyBinCount) {
+          freqData = new Uint8Array(analyser.frequencyBinCount)
+          waveData = new Uint8Array(analyser.fftSize)
+        }
+        analyser.getByteFrequencyData(freqData)
+        if (waveData) analyser.getByteTimeDomainData(waveData)
+      }
+      const freq = freqData
+      const wave = waveData
       const bins = 48
-      const freq = analyser ? new Uint8Array(analyser.frequencyBinCount) : null
-      const wave = analyser ? new Uint8Array(analyser.fftSize) : null
-      if (analyser && freq) analyser.getByteFrequencyData(freq)
-      if (analyser && wave) analyser.getByteTimeDomainData(wave)
       const levels = levelsRef.current
       const maxBin = freq ? freq.length - 1 : bins - 1
       const glitching = active && !s.calm && !reducedMotion && (time % 9000) < 130
@@ -803,7 +829,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         const target = active && freq
           ? clamp((freq[idx] / 255) * s.vizSensitivity, 0, 1)
           : 0.025 + 0.018 * (0.5 + 0.5 * Math.sin(time / 900 + i * 0.45))
-        levels[i] += (target - levels[i]) * (active ? 0.24 : 0.05)
+        levels[i] += (target - levels[i]) * (active ? 0.14 : 0.035)
         if (s.vizMode !== 'globe' && s.vizMode !== 'scope') {
           const bh = 2 + levels[i] * h * 0.68
           ctx.fillStyle = i % 9 === 0 ? '#790d18' : '#142b83'
@@ -848,11 +874,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       ctx.fillText(active ? 'SIGNAL:LOCK' : 'SIGNAL:IDLE', w - 12, h - 8)
       ctx.textAlign = 'left'
     }
-    let last = 0
-    const interval = reducedMotion || settings.calm ? 200 : 32
     const loop = (time: number) => {
-      if (document.hidden) { rafRef.current = requestAnimationFrame(loop); return }
-      if (time - last >= interval) { draw(time); last = time }
+      if (!document.hidden) draw(time)
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
