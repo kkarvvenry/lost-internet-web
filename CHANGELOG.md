@@ -2,6 +2,12 @@
 
 ## 2026-11-25
 
+### `8bffa2d` — Help overlay, focus trap and mobile polish
+- `keys.txt` разделён на группы PLAYBACK / INTERFACE / FILES, добавлены описания для всех hotkeys и подсказка про TAB/ESC.
+- Кнопка `?` в titlebar открывает справку без поиска в меню.
+- Верхнее popup-окно ловит Tab: фокус циклически переходит между его кнопками и не уходит в основной интерфейс; `aria-modal` выставляется только для активного окна.
+- Добавлены `safe-area-inset` для titlebar/status/popup и увеличены touch-цели на мобильных с `(pointer: coarse)`.
+
 ### `5ce18a9` — Catalog publish rate limit
 - `POST /api/catalog` ограничен 10 публикациями с одного IP в сутки.
 - Счётчик хранится в D1-таблице `catalog_publish_hits` и обновляется атомарной SQL-записью с `UPSERT`.
