@@ -17,14 +17,26 @@ const catalogApi = process.env.CATALOG_API || 'https://lost-internet-web.stepanb
 app.use('/api', express.raw({ type: '*/*', limit: '64kb' }))
 app.use('/api', async (req, res) => {
   try {
-    const upstream = await fetch(new URL(req.originalUrl, catalogApi), {
+    const headers = {}
+    for (const name of ['content-type', 'accept', 'cf-connecting-ip', 'x-forwarded-for']) {
+      const value = req.headers[name]
+      if (typeof value === 'string') headers[name] = value
+    }
+    const upstreamPath = `api${req.originalUrl.replace(/^\/api/, '')}`
+    const upstream = await fetch(new URL(upstreamPath, `${catalogApi.replace(/\/$/, '')}/`), {
       method: req.method,
-      headers: req.headers['content-type'] ? { 'Content-Type': req.headers['content-type'] } : {},
+      headers,
       body: Buffer.isBuffer(req.body) && req.body.length ? req.body : undefined,
     })
     const body = Buffer.from(await upstream.arrayBuffer())
     res.status(upstream.status)
-    for (const name of ['Content-Type', 'Cache-Control', 'Access-Control-Allow-Origin']) {
+    for (const name of [
+      'Content-Type',
+      'Cache-Control',
+      'Access-Control-Allow-Origin',
+      'Access-Control-Allow-Methods',
+      'Access-Control-Allow-Headers',
+    ]) {
       const value = upstream.headers.get(name)
       if (value) res.setHeader(name, value)
     }

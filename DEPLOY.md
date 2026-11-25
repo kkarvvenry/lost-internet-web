@@ -158,6 +158,8 @@ server {
 }
 ```
 
+Локальный `/api/*` прокси передаёт `CF-Connecting-IP` и `X-Forwarded-For` на Worker, поэтому дневной лимит лайков работает и через Nginx/cloudflared.
+
 HTTPS:
 
 ```bash

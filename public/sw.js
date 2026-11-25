@@ -1,4 +1,4 @@
-const CACHE = 'lost-internet-v6'
+const CACHE = 'lost-internet-v7'
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg']
 
 self.addEventListener('install', (event) => {
@@ -29,8 +29,10 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone()
-          void caches.open(CACHE).then((cache) => cache.put('/index.html', copy))
+          if (response.ok) {
+            const copy = response.clone()
+            event.waitUntil(caches.open(CACHE).then((cache) => cache.put('/index.html', copy)))
+          }
           return response
         })
         .catch(() => caches.match('/index.html'))
@@ -44,7 +46,7 @@ self.addEventListener('fetch', (event) => {
       return fetch(request).then((response) => {
         if (response.ok) {
           const copy = response.clone()
-          void caches.open(CACHE).then((cache) => cache.put(request, copy))
+          event.waitUntil(caches.open(CACHE).then((cache) => cache.put(request, copy)))
         }
         return response
       })
