@@ -766,11 +766,22 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     const draw = (time: number) => {
       const c = visRef.current
       if (!c || !ctx) return
-      const w = c.width = c.clientWidth || 640
-      const h = c.height = c.clientHeight || 170
+      const cssW = c.clientWidth || 640
+      const cssH = c.clientHeight || 170
+      const dpr = Math.min(2, window.devicePixelRatio || 1)
+      const pixelW = Math.max(1, Math.floor(cssW * dpr))
+      const pixelH = Math.max(1, Math.floor(cssH * dpr))
+      if (c.width !== pixelW || c.height !== pixelH) {
+        c.width = pixelW
+        c.height = pixelH
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      const w = cssW
+      const h = cssH
       const s = settingsRef.current
       const analyser = analyserRef.current
-      const active = Boolean(analyser && playing)
+      const el = activeSlotRef.current === 'a' ? audioRef.current : nextAudioRef.current
+      const active = Boolean(analyser && el && !el.paused && !el.ended)
       ctx.fillStyle = '#050505'
       ctx.fillRect(0, 0, w, h)
       ctx.strokeStyle = '#252525'
@@ -784,7 +795,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       if (analyser && wave) analyser.getByteTimeDomainData(wave)
       const levels = levelsRef.current
       const maxBin = freq ? freq.length - 1 : bins - 1
-      const glitching = active && !s.calm && (time % 9000) < 130
+      const glitching = active && !s.calm && !reducedMotion && (time % 9000) < 130
       const shift = glitching ? 2 : 0
       const step = w / bins
       for (let i = 0; i < bins; i++) {
@@ -837,19 +848,16 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       ctx.fillText(active ? 'SIGNAL:LOCK' : 'SIGNAL:IDLE', w - 12, h - 8)
       ctx.textAlign = 'left'
     }
-    if (reducedMotion || settings.calm) {
-      draw(0)
-      return
-    }
     let last = 0
+    const interval = reducedMotion || settings.calm ? 200 : 32
     const loop = (time: number) => {
       if (document.hidden) { rafRef.current = requestAnimationFrame(loop); return }
-      if (time - last >= 32) { draw(time); last = time }
+      if (time - last >= interval) { draw(time); last = time }
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
-  }, [playing, reducedMotion, settings.calm, settings.vizMode, settings.vizSensitivity])
+  }, [reducedMotion, settings.calm, settings.vizMode, settings.vizSensitivity])
 
   useEffect(() => () => {
     for (const list of urlsRef.current.values()) for (const url of list) URL.revokeObjectURL(url)
@@ -944,7 +952,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     setProgress(0)
     void persistTrack(updated).catch(() => {})
     ensureAudioContext()
-    void audioCtxRef.current?.resume()
+    void audioCtxRef.current?.resume().catch(() => {})
 
     if (canFade) {
       const from = activeSlotRef.current
@@ -997,7 +1005,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     }
     if (audio.paused) {
       ensureAudioContext()
-      void audioCtxRef.current?.resume()
+      void audioCtxRef.current?.resume().catch(() => {})
       stopFade()
       setSlotLevel(activeSlotRef.current, 1)
       const inactive = activeSlotRef.current === 'a' ? 'b' : 'a'
