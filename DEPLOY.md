@@ -14,7 +14,7 @@ https://lost-internet-web.stepanb249.workers.dev
 
 Он публичный, работает круглосуточно и обновляется автоматически после `git push`.
 
-> Полный домен вида `https://example.com` требует покупки/регистрации домена. Если покупать не хочешь — используй бесплатный `*.pages.dev`, это полноценный постоянный адрес.
+> Полный домен вида `https://example.com` требует покупки/регистрации домена. Если покупать не хочешь — используй бесплатный `*.workers.dev`, это полноценный постоянный адрес.
 
 ### Что уже готово
 
@@ -23,6 +23,7 @@ https://lost-internet-web.stepanb249.workers.dev
 - `wrangler.jsonc` настроен на деплой `dist/`, Worker `src/worker.ts` и D1-базу `lost-internet-catalog`;
 - `migrations/0001_init.sql` создаёт таблицу `catalog_tracks`;
 - `migrations/0002_like_hits.sql` добавляет таблицу `catalog_like_hits` для защиты от спама лайками;
+- `migrations/0003_catalog_likes_index.sql` добавляет индекс для быстрой сортировки по лайкам;
 - API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`;

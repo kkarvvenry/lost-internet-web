@@ -30,7 +30,15 @@ export default {
     const url = new URL(request.url)
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: CORS })
+      return new Response(null, {
+        status: 204,
+        headers: {
+          ...CORS,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+          'Referrer-Policy': 'no-referrer',
+        },
+      })
     }
 
     if (url.pathname === '/api/health') {
@@ -89,7 +97,7 @@ export default {
           clean(body.album, 120),
           clean(body.genre, 80),
           clean(body.format, 16).toUpperCase(),
-          Number(body.duration) || 0,
+          Math.min(86400, Math.max(0, Number(body.duration) || 0)),
           Date.now()
         ).run()
         return json({ ok: true, id }, 201)
@@ -107,24 +115,21 @@ export default {
           .map(byte => byte.toString(16).padStart(2, '0'))
           .join('')
         const hitKey = `${trackId}:${ipHash}:${day}`
-        const existing = await env.lost_internet_catalog.prepare(
-          'SELECT 1 FROM catalog_like_hits WHERE hit_key = ?'
-        ).bind(hitKey).first()
-        if (existing) return json({ ok: true, duplicate: true })
+        const claim = await env.lost_internet_catalog.prepare(
+          'INSERT OR IGNORE INTO catalog_like_hits (hit_key, track_id, ip_hash, day, created_at) VALUES (?, ?, ?, ?, ?)'
+        ).bind(hitKey, trackId, ipHash, day, Date.now()).run()
+        if (!claim.meta?.changes) return json({ ok: true, duplicate: true })
 
         await env.lost_internet_catalog.prepare(
           'UPDATE catalog_tracks SET likes = likes + 1 WHERE id = ?'
         ).bind(trackId).run()
-        await env.lost_internet_catalog.prepare(
-          'INSERT OR IGNORE INTO catalog_like_hits (hit_key, track_id, ip_hash, day, created_at) VALUES (?, ?, ?, ?, ?)'
-        ).bind(hitKey, trackId, ipHash, day, Date.now()).run()
         return json({ ok: true })
       }
 
       return json({ error: 'not found' }, 404)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'internal error'
-      return json({ error: message }, 500)
+      console.error(error)
+      return json({ error: 'internal error' }, 500)
     }
   },
 }

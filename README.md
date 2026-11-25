@@ -72,6 +72,7 @@ cloudflared tunnel --url http://localhost:5173
 - `src/worker.ts` — Cloudflare Worker с API `/api/health`, `/api/catalog`, `/api/catalog/:id/like`;
 - `migrations/0001_init.sql` — схема D1 для общего каталога;
 - `migrations/0002_like_hits.sql` — защита от повторных лайков с одного адреса в сутки;
+- `migrations/0003_catalog_likes_index.sql` — индекс для сортировки NETWORK по лайкам;
 - `wrangler.jsonc` — деплой и привязка D1;
 - `server/index.mjs` — Express-сервер для dev/prod раздачи.
 
