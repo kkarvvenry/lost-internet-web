@@ -2,6 +2,13 @@
 
 ## 2026-11-25
 
+### `bbf6199` — Service links: Yandex Music, Spotify and more
+- В таблице треков и в публичном каталоге появилась кнопка `WEB`: она открывает окно `links.txt` с поиском трека по шести сервисам — Yandex Music, Spotify, YouTube Music, Bandcamp, SoundCloud и MusicBrainz.
+- На локальных треках можно сохранить прямые ссылки на каждый сервис; ссылки проходят проверку хоста, хранятся в IndexedDB и переживают импорт/экспорт метаданных.
+- Для записей публичного индекса доступны только поисковые ссылки — чужие ссылки сохранить нельзя.
+- В настройках добавлена секция `// INTEGRATIONS` с выбором сервиса по умолчанию; его поиск открывается верхней кнопкой в окне ссылок.
+- Логика URL вынесена в `src/lib/links.ts` и покрыта unit-тестами; добавлены RU-строки.
+
 ### `6825589` — CI auto-deploy with the existing Cloudflare token secret
 - Workflow принимает API-токен из `CLOUDFLARE_API_TOKEN` или из уже созданного `LOST_INTERNET_CL`.
 - Account ID перенесён в `wrangler.jsonc`, отдельный секрет `CLOUDFLARE_ACCOUNT_ID` больше не нужен.

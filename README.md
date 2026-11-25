@@ -24,7 +24,8 @@ Dark Webcore / Y2K локальный музыкальный плеер с по�
 - смена темы DARK / LIGHT с плавным переходом, hotkey `T` и кнопкой в titlebar;
 - бегущая строка в стиле old-internet с числом локальных файлов и записей публичного индекса; свежие записи каталога (<7 дней) получают мигающий бейдж `NEW!`; CRT-оверлей поверх визуализатора;
 - интерфейс RU / EN: переключатель в titlebar и в `SETTINGS // LANGUAGE`, выбор сохраняется вместе с остальными настройками; справка и статусы тоже переводятся;
-- перетаскиваемые popup-окна Internet Explorer, Favorites, About, Help; справка открывается кнопкой `?` или `H`, верхнее окно удерживает фокус внутри себя;
+- привязки к внешним сервисам: кнопка `WEB` на треке открывает окно `links.txt` с поиском по Yandex Music, Spotify, YouTube Music, Bandcamp, SoundCloud и MusicBrainz; прямые ссылки сохраняются локально в метаданных трека, для публичных записей доступен только поиск; сервис по умолчанию выбирается в `SETTINGS // INTEGRATIONS`;
+- перетаскиваемые popup-окна Internet Explorer, Favorites, About, Help, links.txt; справка открывается кнопкой `?` или `H`, верхнее окно удерживает фокус внутри себя;
 - меню File / View / Playback / Help, экспорт и импорт метаданных, очистка архива;
 - горячие клавиши: Space, N, P, M, [ / ], F, S, R, H, T, 1/2/3/4, Ctrl+O, Ctrl+F, Ctrl+Left/Right, Esc;
 - сохранение файлов, обложек, плейлистов, настроек и последнего трека в IndexedDB; в `CONFIG.SYS` показан счётчик `USED / QUOTA`;
@@ -48,7 +49,7 @@ npm start
 ## Проверки
 
 ```bash
-npm test     # unit-тесты форматирования, виртуализации таблицы, i18n и rate limit Worker
+npm test     # unit-тесты форматирования, виртуализации таблицы, i18n, внешних ссылок и rate limit Worker
 npm run smoke # проверка живого сайта, ассетов, PWA и API
 npm run verify # build + test + smoke
 ```
@@ -90,7 +91,7 @@ cloudflared tunnel --url http://localhost:5173
 - `migrations/0002_like_hits.sql` — защита от повторных лайков с одного адреса в сутки;
 - `migrations/0003_catalog_likes_index.sql` — индекс для сортировки NETWORK по лайкам;
 - `migrations/0004_publish_hits.sql` — дневной лимит публикаций с одного адреса;
-- `src/lib/format.ts`, `src/lib/table.ts`, `src/lib/i18n.ts` — чистые хелперы, покрытые unit-тестами;
+- `src/lib/format.ts`, `src/lib/table.ts`, `src/lib/i18n.ts`, `src/lib/links.ts` — чистые хелперы, покрытые unit-тестами;
 - `scripts/smoke.mjs` — smoke-проверка публичного деплоя;
 - `.github/workflows/ci.yml` — проверки и автодеплой;
 - `wrangler.jsonc` — деплой и привязка D1;

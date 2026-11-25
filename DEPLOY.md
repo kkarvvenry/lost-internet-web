@@ -27,6 +27,7 @@ https://lost-internet-web.stepanb249.workers.dev
 - `migrations/0004_publish_hits.sql` добавляет таблицу дневного лимита публикаций (10 с IP);
 - API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`;
 - интерфейс переводится между RU и EN переключателем в titlebar или в `SETTINGS // LANGUAGE`, выбор сохраняется в IndexedDB;
+- привязки к Yandex Music, Spotify, YouTube Music, Bandcamp, SoundCloud и MusicBrainz работают полностью на стороне браузера: ничего дополнительно деплоить и никакие ключи не нужны;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`;
 - сайт уже задеплоен и отвечает `200`.
