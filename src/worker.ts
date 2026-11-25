@@ -65,8 +65,9 @@ export default {
         const params: string[] = []
         let sql = 'SELECT id, title, artist, album, genre, format, duration, likes, created_at FROM catalog_tracks'
         if (q) {
-          sql += ' WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR genre LIKE ?'
-          const term = `%${q}%`
+          const escaped = q.replace(/[\\%_]/g, '\\$&')
+          sql += " WHERE title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\' OR album LIKE ? ESCAPE '\\' OR genre LIKE ? ESCAPE '\\'"
+          const term = `%${escaped}%`
           params.push(term, term, term, term)
         }
         sql += ` ORDER BY ${sort} LIMIT 200`
@@ -105,7 +106,11 @@ export default {
 
       const likeMatch = url.pathname.match(/^\/api\/catalog\/([^/]+)\/like$/)
       if (likeMatch && request.method === 'POST') {
-        const trackId = likeMatch[1]
+        const trackId = clean(likeMatch[1], 64)
+        const exists = await env.lost_internet_catalog.prepare(
+          'SELECT 1 FROM catalog_tracks WHERE id = ?'
+        ).bind(trackId).first()
+        if (!exists) return json({ error: 'track not found' }, 404)
         const ip = request.headers.get('CF-Connecting-IP')
           || request.headers.get('x-forwarded-for')
           || 'local'

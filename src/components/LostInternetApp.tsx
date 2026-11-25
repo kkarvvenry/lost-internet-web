@@ -240,13 +240,22 @@ async function parseId3(file: File): Promise<{ name?: string; artist?: string; a
     if (id === 'TALB') out.album = decodeId3Text(payload)
     if (id === 'TCON') out.genre = decodeId3Text(payload)
     if (id === 'APIC' && !out.artBlob) {
-      let i = 1
-      while (i < payload.length && payload[i] !== 0) i++
-      const mime = new TextDecoder('latin1').decode(payload.slice(1, i))
-      i += 2
-      while (i < payload.length && payload[i] !== 0) i++
-      i += 1
-      const image = payload.slice(i)
+      const encoding = payload[0]
+      const utf16 = encoding === 1 || encoding === 2
+      const unit = utf16 ? 2 : 1
+      const decoder = new TextDecoder(encoding === 1 ? 'utf-16le' : encoding === 2 ? 'utf-16be' : encoding === 3 ? 'utf-8' : 'latin1')
+      const findTerm = (from: number) => {
+        let i = from
+        while (i + unit <= payload.length) {
+          if (payload[i] === 0 && (!utf16 || payload[i + 1] === 0)) return i
+          i += unit
+        }
+        return payload.length
+      }
+      const mimeEnd = findTerm(1)
+      const mime = decoder.decode(payload.slice(1, mimeEnd)).replace(/^\uFEFF/, '')
+      const descEnd = findTerm(mimeEnd + unit)
+      const image = payload.slice(descEnd + unit)
       if (image.length > 16) out.artBlob = new Blob([image], { type: mime || (image[0] === 0xff ? 'image/jpeg' : 'image/png') })
     }
   }
@@ -350,7 +359,11 @@ function renderArt(canvas: HTMLCanvasElement, artUrl: string | undefined, label:
 export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [tracks, setTracks] = useState<Track[]>([])
   const [playlists, setPlaylists] = useState<Playlist[]>([{ id: 'p1', name: 'webcore', trackIds: [] }])
-  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  const [settings, setSettings] = useState<Settings>(() => {
+    let theme: 'dark' | 'light' = 'dark'
+    try { theme = localStorage.getItem('lost-internet-theme') === 'light' ? 'light' : 'dark' } catch { /* storage unavailable */ }
+    return { ...DEFAULT_SETTINGS, theme }
+  })
   const [section, setSection] = useState<Section>('library')
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>('p1')
   const [query, setQuery] = useState('')
@@ -525,6 +538,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     if (id === 'recent') setSort({ field: 'lastPlayed', dir: 'desc' })
   }
   async function persistTrack(track: Track) {
+    if (!tracksRef.current.some(x => x.id === track.id)) return
     const { url: _url, artUrl: _artUrl, ...stored } = track
     void _url; void _artUrl
     await dbPut(STORE_TRACKS, stored)
@@ -601,6 +615,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }, [toast])
 
   useEffect(() => {
+    if (!ready) return
     const theme = settings.theme === 'light' ? 'light' : 'dark'
     document.documentElement.dataset.theme = theme
     document.body.dataset.theme = theme
@@ -609,7 +624,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       theme === 'light' ? '#D6D6D6' : '#050505',
     )
     try { localStorage.setItem('lost-internet-theme', theme) } catch { /* storage unavailable */ }
-  }, [settings.theme])
+  }, [ready, settings.theme])
 
   useEffect(() => {
     if (section !== 'network') return
@@ -1059,10 +1074,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     const previousSrc = active.src
     const previousTime = active.currentTime
     const canFade = allowFade && settingsRef.current.crossfade && !active.paused && previousId !== id
-    const updated: Track = { ...t, plays: (t.plays ?? 0) + 1, lastPlayed: Date.now() }
     const message = `Playing: ${t.artist} - ${t.name}`
     const commit = () => {
       if (token !== playTokenRef.current) return
+      const latest = tracksRef.current.find(x => x.id === id)
+      if (!latest) return
+      const updated: Track = { ...latest, plays: (latest.plays ?? 0) + 1, lastPlayed: Date.now() }
       setTracks(prev => prev.map(x => x.id === id ? updated : x))
       tracksRef.current = tracksRef.current.map(x => x.id === id ? updated : x)
       setCurrentId(id)
@@ -1388,11 +1405,15 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }
   function removeTrack(id: string) {
     if (!window.confirm('Remove this track from the local archive?')) return
+    const wasPending = pendingIdRef.current === id
+    playTokenRef.current += 1
+    pendingIdRef.current = null
+    autoAdvanceRef.current = null
     void dbDelete(STORE_TRACKS, id).catch(() => warnStorage('Track removed in memory only. It may return after reload.'))
     setTracks(prev => prev.filter(t => t.id !== id))
     tracksRef.current = tracksRef.current.filter(t => t.id !== id)
     setPlaylists(prev => prev.map(p => ({ ...p, trackIds: p.trackIds.filter(x => x !== id) })))
-    if (currentId === id) {
+    if (currentId === id || wasPending) {
       stopFade()
       audioRef.current?.pause()
       nextAudioRef.current?.pause()
@@ -1405,6 +1426,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }
   function clearArchive() {
     if (!window.confirm('Clear the entire local archive? This cannot be undone.')) return
+    playTokenRef.current += 1
+    pendingIdRef.current = null
+    autoAdvanceRef.current = null
     void dbClear(STORE_TRACKS).catch(() => warnStorage('Archive cleared in memory only. It may return after reload.'))
     const storedTracks = tracksRef.current
     stopFade()

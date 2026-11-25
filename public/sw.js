@@ -1,12 +1,22 @@
-const CACHE = 'lost-internet-v8'
+const CACHE = 'lost-internet-v9'
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg']
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE)
-      .then((cache) => cache.addAll(SHELL))
-      .then(() => self.skipWaiting())
-  )
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE)
+    await cache.addAll(SHELL)
+    try {
+      const response = await fetch('/index.html', { cache: 'no-store' })
+      if (response.ok) {
+        const html = await response.text()
+        const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((match) => match[1])
+        if (assets.length) await cache.addAll(assets)
+      }
+    } catch (_) {
+      // Network unavailable: runtime cache will fill assets on first use.
+    }
+    await self.skipWaiting()
+  })())
 })
 
 self.addEventListener('activate', (event) => {
