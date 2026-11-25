@@ -720,6 +720,22 @@ html[data-theme='light'] ::selection {
   color: var(--li-white);
 }
 
+.li-table-wrap.is-virtualized .li-table tbody tr:not(.li-table-spacer) {
+  height: 30px;
+}
+
+.li-table-wrap.is-virtualized .li-table td {
+  height: 30px;
+  padding-top: 0;
+  padding-bottom: 0;
+  vertical-align: middle;
+}
+
+.li-table .li-table-spacer td {
+  padding: 0;
+  border-bottom: 0;
+}
+
 .li-empty {
   text-align: center;
   color: var(--li-muted);

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type UIEvent as ReactUIEvent } from 'react'
 import { uid, fmt, fmtBytes, clamp, dbToGain, parseName } from '../lib/format'
+import { VIRTUALIZE_THRESHOLD, tableWindow } from '../lib/table'
 import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
@@ -374,6 +375,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [ready, setReady] = useState(false)
   const [storageUsage, setStorageUsage] = useState<{ used: number; quota: number } | null>(null)
+  const [tableScrollTop, setTableScrollTop] = useState(0)
+  const [tableViewportHeight, setTableViewportHeight] = useState(400)
   const [updateReady, setUpdateReady] = useState(false)
   const [glitchActive, setGlitchActive] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -383,6 +386,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const nextAudioRef = useRef<HTMLAudioElement | null>(null)
   const artRef = useRef<HTMLCanvasElement | null>(null)
   const visRef = useRef<HTMLCanvasElement | null>(null)
+  const tableWrapRef = useRef<HTMLDivElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const folderRef = useRef<HTMLInputElement | null>(null)
   const backupRef = useRef<HTMLInputElement | null>(null)
@@ -541,6 +545,26 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     window.addEventListener('lost-internet-update', onUpdate)
     return () => window.removeEventListener('lost-internet-update', onUpdate)
   }, [])
+
+  useEffect(() => {
+    const el = tableWrapRef.current
+    if (el) el.scrollTop = 0
+    setTableScrollTop(0)
+  }, [section, query, sort, playlistSort, selectedPlaylistId])
+
+  useEffect(() => {
+    const el = tableWrapRef.current
+    if (!el) return
+    const measure = () => setTableViewportHeight(el.clientHeight || 400)
+    measure()
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(measure)
+      observer.observe(el)
+      return () => observer.disconnect()
+    }
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [section])
 
   useEffect(() => {
     if (!ready || section !== 'settings' || !navigator.storage?.estimate) return
@@ -1702,8 +1726,18 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     return <button className="li-thbtn" onClick={() => toggleSort(field)}>{label}{active?.field === field ? (active.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>
   }
   function renderTable() {
+    const virtualized = visibleTracks.length > VIRTUALIZE_THRESHOLD
+    const { start, end, topSpacer, bottomSpacer } = tableWindow(visibleTracks.length, tableScrollTop, tableViewportHeight)
+    const rows = virtualized ? visibleTracks.slice(start, end) : visibleTracks
     return (
-      <div className="li-table-wrap">
+      <div
+        ref={tableWrapRef}
+        className={`li-table-wrap${virtualized ? ' is-virtualized' : ''}`}
+        onScroll={virtualized ? (e: ReactUIEvent<HTMLDivElement>) => {
+          setTableScrollTop(e.currentTarget.scrollTop)
+          setTableViewportHeight(e.currentTarget.clientHeight || 400)
+        } : undefined}
+      >
         <table className="li-table">
           <thead>
             <tr>
@@ -1719,7 +1753,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
             </tr>
           </thead>
           <tbody>
-            {visibleTracks.map((t, i) => (
+            {topSpacer > 0 && (
+              <tr className="li-table-spacer" aria-hidden="true" style={{ height: `${topSpacer}px` }}>
+                <td colSpan={7} style={{ height: `${topSpacer}px` }} />
+              </tr>
+            )}
+            {rows.map((t, i) => (
               <tr
                 key={t.id}
                 className={t.id === currentId ? 'is-selected' : ''}
@@ -1733,7 +1772,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 }}
                 title="Double click or press Enter to play"
               >
-                <td>{String(i + 1).padStart(2, '0')}</td>
+                <td>{String((virtualized ? start + i : i) + 1).padStart(2, '0')}</td>
                 <td>{t.name}</td>
                 <td>{t.artist}</td>
                 <td>{t.album}</td>
@@ -1756,6 +1795,11 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 </td>
               </tr>
             ))}
+            {bottomSpacer > 0 && (
+              <tr className="li-table-spacer" aria-hidden="true" style={{ height: `${bottomSpacer}px` }}>
+                <td colSpan={7} style={{ height: `${bottomSpacer}px` }} />
+              </tr>
+            )}
             {visibleTracks.length === 0 && (
               <tr><td colSpan={7} className="li-empty">No tracks. Use ADD FILES / ADD FOLDER or drop audio files here.</td></tr>
             )}
