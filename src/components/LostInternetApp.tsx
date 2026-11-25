@@ -123,8 +123,8 @@ const MENUS: Array<{ id: MenuKind; label: string }> = [
   { id: 'playback', label: 'Playback' },
   { id: 'help', label: 'Help' },
 ]
-const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320, help: 380 }
-const POPUP_HEIGHT: Record<PopupKind, number> = { ie: 150, favorites: 180, about: 200, help: 360 }
+const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320, help: 420 }
+const POPUP_HEIGHT: Record<PopupKind, number> = { ie: 150, favorites: 180, about: 200, help: 440 }
 const POPUP_TITLE: Record<PopupKind, string> = {
   ie: 'Internet Explorer',
   favorites: '★ Favorites',
@@ -848,6 +848,34 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   useEffect(() => {
     if (artRef.current) renderArt(artRef.current, current?.artUrl, current ? 'ARCHIVE IMAGE' : 'NO SIGNAL', glitchActive, settings.theme)
   }, [current?.id, current?.artUrl, glitchActive, settings.theme])
+
+  useEffect(() => {
+    if (!popups.length) return
+    const top = popups.reduce((best, p) => p.z > best.z ? p : best)
+    const trap = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return
+      const root = document.querySelector<HTMLElement>(`[data-popup-id="${top.id}"]`)
+      if (!root) return
+      const focusable = Array.from(root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).filter(el => el.offsetParent !== null)
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (!root.contains(document.activeElement)) {
+        e.preventDefault()
+        first.focus()
+      } else if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', trap, true)
+    return () => document.removeEventListener('keydown', trap, true)
+  }, [popups])
 
   useEffect(() => {
     if (!ready || popupsSeededRef.current || !settings.showPopups) return
@@ -2104,6 +2132,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     dropActive ? 'is-drop' : '',
     busy ? 'is-busy' : '',
   ].filter(Boolean).join(' ')
+  const topPopupId = popups.length ? popups.reduce((best, p) => p.z > best.z ? p : best).id : null
 
   return (
     <div
@@ -2131,6 +2160,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <span className="li-titlebar__title">lost_internet.exe</span>
           <span className="li-titlebar__tag">v1.0 // LOCAL BUILD</span>
           <div className="li-titlebar__spacer" />
+          <button className="li-winbtn" title="Keyboard shortcuts (H)" aria-label="Keyboard shortcuts" onClick={e => { if (e.detail > 1) return; openPopup('help') }}>?</button>
           <button className="li-winbtn" title="Toggle theme (T)" aria-label="Toggle theme" onClick={e => { if (e.detail > 1) return; setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' })) }}>◐</button>
           <button className="li-winbtn" title="Toggle sidebar" aria-label="Toggle sidebar" onClick={e => { if (e.detail > 1) return; setSidebarCollapsed(v => !v) }}>_</button>
           <button className="li-winbtn" title="Fullscreen" aria-label="Fullscreen" onClick={e => { if (e.detail > 1) return; void document.documentElement.requestFullscreen?.().catch(() => {}) }}>□</button>
@@ -2250,9 +2280,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         <div
           key={p.id}
           data-popup-id={p.id}
-          className="li-popup"
+          className={`li-popup li-popup--${p.kind}`}
           role="dialog"
-          aria-modal="false"
+          aria-modal={p.id === topPopupId}
           aria-label={p.title}
           style={{ left: p.x, top: p.y, width: POPUP_WIDTH[p.kind], zIndex: p.z }}
           onMouseDown={() => setPopups(prev => prev.map(x => x.id === p.id ? { ...x, z: ++zRef.current } : x))}
@@ -2308,30 +2338,54 @@ function IePopupBody({ calm, onClose }: { calm: boolean; onClose: () => void }) 
 }
 
 function HelpPopupBody() {
-  const rows: Array<[string, string]> = [
-    ['SPACE', 'play / pause'],
-    ['N / P', 'next / previous'],
-    ['M', 'mute'],
-    ['[ / ]', 'volume down / up'],
-    ['F', 'favorite current track'],
-    ['S', 'shuffle'],
-    ['R', 'repeat off / all / one'],
-    ['1 / 2 / 3 / 4', 'visualizer mode'],
-    ['H', 'this help'],
-    ['T', 'toggle theme'],
-    ['CTRL+O', 'add files'],
-    ['CTRL+F', 'search library'],
-    ['CTRL+← / →', 'previous / next'],
-    ['ESC', 'close popups'],
+  const groups: Array<{ title: string; rows: Array<[string, string]> }> = [
+    {
+      title: 'PLAYBACK',
+      rows: [
+        ['SPACE', 'play / pause'],
+        ['N / P', 'next / previous track'],
+        ['CTRL+← / →', 'previous / next track'],
+        ['M', 'mute / unmute'],
+        ['[ / ]', 'volume down / up'],
+        ['F', 'favorite current track'],
+        ['S', 'shuffle on / off'],
+        ['R', 'repeat off / all / one'],
+      ],
+    },
+    {
+      title: 'INTERFACE',
+      rows: [
+        ['1 / 2 / 3 / 4', 'spectrum / globe / hybrid / scope'],
+        ['T', 'toggle dark / light theme'],
+        ['H', 'open keys.txt'],
+        ['ESC', 'close menus and popups'],
+      ],
+    },
+    {
+      title: 'FILES',
+      rows: [
+        ['CTRL+O', 'add audio files'],
+        ['CTRL+F', 'focus library search'],
+        ['DRAG', 'drop audio files anywhere'],
+        ['DBLCLICK', 'play a row in the track table'],
+      ],
+    },
   ]
   return (
-    <div className="li-help">
-      {rows.map(([key, label]) => (
-        <div className="li-help__row" key={key}>
-          <span>{key}</span>
-          <span>{label}</span>
-        </div>
+    <div className="li-help" aria-label="Keyboard shortcuts">
+      <div className="li-help__head">keys.txt // HOTKEYS</div>
+      {groups.map(group => (
+        <section className="li-help__group" key={group.title}>
+          <h4>// {group.title}</h4>
+          {group.rows.map(([key, label]) => (
+            <div className="li-help__row" key={key}>
+              <span>{key}</span>
+              <span>{label}</span>
+            </div>
+          ))}
+        </section>
       ))}
+      <div className="li-help__foot">TAB // switch inside window &nbsp; ESC // close</div>
     </div>
   )
 }
