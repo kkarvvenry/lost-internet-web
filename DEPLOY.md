@@ -2,12 +2,14 @@
 
 Приложение полностью клиентское. Сервер нужен только для раздачи статики; пользовательские аудиофайлы остаются в IndexedDB конкретного браузера.
 
-## 0. Постоянный публичный адрес: Cloudflare Pages + GitHub (рекомендуется)
+**Рабощая ссылка:** https://lost-internet-web.stepanb249.workers.dev
+
+## 0. Постоянный публичный адрес: Cloudflare + GitHub (рекомендуется)
 
 Это самый простой способ получить **постоянную ссылку без покупки домена**. Cloudflare бесплатно даёт адрес вида:
 
 ```text
-https://lost-internet-web.pages.dev
+https://lost-internet-web.stepanb249.workers.dev
 ```
 
 Он публичный, работает круглосуточно и обновляется автоматически после `git push`.
@@ -17,9 +19,11 @@ https://lost-internet-web.pages.dev
 ### Что уже готово
 
 - `npm run build` создаёт `dist/`;
-- `public/_headers` автоматически копируется в `dist/`; SPA-fallback уже включён через `not_found_handling: single-page-application`;
+- `public/_headers` автоматически копируется в `dist/`; SPA-fallback включён через `not_found_handling: single-page-application`;
+- `wrangler.jsonc` уже настроен на деплой `dist/`;
 - `.env` исключён из git;
-- репозиторий создан, код запушен в `main`.
+- репозиторий создан, код запушен в `main`;
+- сайт уже задеплоен и отвечает `200`.
 
 ### Шаги
 
@@ -36,6 +40,14 @@ git add .
 git commit -m "Update player"
 git push origin main
 ```
+
+Ручной деплой из папки проекта:
+
+```powershell
+npm run deploy
+```
+
+Эквивалентно `npm run build && npx wrangler deploy`.
 
 3. Зайди в Cloudflare Dashboard → **Workers & Pages** → **Create** → **Pages** → **Connect to Git**.
 4. Выбери репозиторий `lost-internet-web`.
