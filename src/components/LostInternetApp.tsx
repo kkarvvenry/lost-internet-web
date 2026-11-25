@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent }
 import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
-type VizMode = 'spectrum' | 'globe' | 'hybrid'
+type VizMode = 'spectrum' | 'globe' | 'hybrid' | 'scope'
 type EqPreset = 'flat' | 'bass' | 'vocal' | 'night' | 'custom'
 type Section = 'now' | 'playlist' | 'library' | 'radio' | 'settings' | 'archive' | 'recent' | 'network' | 'favorites' | 'unknown'
 type SortField = 'name' | 'artist' | 'album' | 'duration' | 'plays' | 'addedAt' | 'lastPlayed'
@@ -19,6 +19,10 @@ type Settings = {
   eqPreset: EqPreset
   crossfade: boolean
   crossfadeMs: number
+  compressor: boolean
+  compressorThreshold: number
+  compressorRatio: number
+  makeup: number
   scanlines: boolean
   grain: boolean
   glitch: boolean
@@ -78,6 +82,10 @@ const DEFAULT_SETTINGS: Settings = {
   eqPreset: 'flat',
   crossfade: true,
   crossfadeMs: 600,
+  compressor: true,
+  compressorThreshold: -18,
+  compressorRatio: 4,
+  makeup: 2,
   scanlines: true,
   grain: true,
   glitch: true,
@@ -125,6 +133,7 @@ function fmt(ms: number) {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
 function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)) }
+function dbToGain(db: number) { return Math.pow(10, db / 20) }
 function parseName(fileName: string) {
   const base = fileName.replace(/\.[^.]+$/, '')
   const parts = base.split(' - ')
@@ -332,6 +341,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [busy, setBusy] = useState(false)
   const [dropActive, setDropActive] = useState(false)
   const [catalog, setCatalog] = useState<CatalogTrack[]>([])
+  const [catalogQuery, setCatalogQuery] = useState('')
+  const [catalogSort, setCatalogSort] = useState<'recent' | 'likes'>('recent')
+  const [catalogLikes, setCatalogLikes] = useState(0)
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [ready, setReady] = useState(false)
   const [glitchActive, setGlitchActive] = useState(false)
@@ -349,6 +361,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const filtersRef = useRef<{ bass: BiquadFilterNode; mid: BiquadFilterNode; treble: BiquadFilterNode } | null>(null)
   const gainsRef = useRef<{ a: GainNode; b: GainNode } | null>(null)
   const masterGainRef = useRef<GainNode | null>(null)
+  const compressorRef = useRef<DynamicsCompressorNode | null>(null)
   const activeSlotRef = useRef<'a' | 'b'>('a')
   const pendingIdRef = useRef<string | null>(null)
   const fadeRafRef = useRef<number | null>(null)
@@ -418,7 +431,11 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       return
     }
     const el = slot === 'a' ? audioRef.current : nextAudioRef.current
-    if (el) el.volume = settingsRef.current.muted ? 0 : settingsRef.current.volume * value
+    if (el) {
+      el.volume = settingsRef.current.muted
+        ? 0
+        : clamp(settingsRef.current.volume * dbToGain(settingsRef.current.makeup) * value, 0, 1)
+    }
   }
   function fadeSlots(from: 'a' | 'b', to: 'a' | 'b', ms: number) {
     stopFade()
@@ -512,11 +529,14 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }, [toast])
 
   useEffect(() => {
-    if (section === 'network') void loadCatalog()
-  }, [section])
+    if (section !== 'network') return
+    const timer = window.setTimeout(() => { void loadCatalog() }, 160)
+    return () => window.clearTimeout(timer)
+  }, [section, catalogQuery, catalogSort])
 
   useEffect(() => {
-    const level = settings.muted ? 0 : settings.volume
+    const gain = dbToGain(settings.makeup)
+    const level = settings.muted ? 0 : settings.volume * gain
     const master = masterGainRef.current
     if (master) {
       master.gain.value = level
@@ -526,12 +546,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     } else {
       const a = audioRef.current
       const b = nextAudioRef.current
-      if (a) a.volume = settings.muted ? 0 : settings.volume * fadeLevelsRef.current.a
-      if (b) b.volume = settings.muted ? 0 : settings.volume * fadeLevelsRef.current.b
+      if (a) a.volume = settings.muted ? 0 : clamp(settings.volume * gain * fadeLevelsRef.current.a, 0, 1)
+      if (b) b.volume = settings.muted ? 0 : clamp(settings.volume * gain * fadeLevelsRef.current.b, 0, 1)
       if (a) a.muted = false
       if (b) b.muted = false
     }
-  }, [settings.volume, settings.muted])
+  }, [settings.volume, settings.muted, settings.makeup])
 
   useEffect(() => {
     const filters = filtersRef.current
@@ -540,6 +560,14 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     filters.mid.gain.value = settings.eq.mid
     filters.treble.gain.value = settings.eq.treble
   }, [settings.eq])
+
+  useEffect(() => {
+    const compressor = compressorRef.current
+    if (!compressor) return
+    compressor.threshold.value = settings.compressor ? settings.compressorThreshold : 0
+    compressor.knee.value = settings.compressor ? 12 : 0
+    compressor.ratio.value = settings.compressor ? settings.compressorRatio : 1
+  }, [settings.compressor, settings.compressorThreshold, settings.compressorRatio])
 
   useEffect(() => {
     const elements = [audioRef.current, nextAudioRef.current].filter((el): el is HTMLAudioElement => Boolean(el))
@@ -616,8 +644,10 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       if (key === 'p') handlePrev()
       if (key === 's') setSettings(s => ({ ...s, shuffle: !s.shuffle }))
       if (key === 'r') cycleRepeat()
+      if (key === 'f' && current) toggleFavorite(current.id)
+      if (key === '[' || key === ']') setSettings(s => ({ ...s, volume: clamp(s.volume + (key === '[' ? -0.05 : 0.05), 0, 1) }))
       if (key === 'h') openPopup('help')
-      if (['1', '2', '3'].includes(key)) setSettings(s => ({ ...s, vizMode: key === '1' ? 'spectrum' : key === '2' ? 'globe' : 'hybrid' }))
+      if (['1', '2', '3', '4'].includes(key)) setSettings(s => ({ ...s, vizMode: key === '1' ? 'spectrum' : key === '2' ? 'globe' : key === '3' ? 'hybrid' : 'scope' }))
       if (e.key === 'Escape') { setOpenMenu(null); setPopups([]) }
     }
     window.addEventListener('keydown', onKey)
@@ -673,7 +703,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       for (let y = 0; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
       const bins = 48
       const freq = analyser ? new Uint8Array(analyser.frequencyBinCount) : null
+      const wave = analyser ? new Uint8Array(analyser.fftSize) : null
       if (analyser && freq) analyser.getByteFrequencyData(freq)
+      if (analyser && wave) analyser.getByteTimeDomainData(wave)
       const levels = levelsRef.current
       const maxBin = freq ? freq.length - 1 : bins - 1
       const glitching = active && !s.calm && (time % 9000) < 130
@@ -685,13 +717,29 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           ? clamp((freq[idx] / 255) * s.vizSensitivity, 0, 1)
           : 0.025 + 0.018 * (0.5 + 0.5 * Math.sin(time / 900 + i * 0.45))
         levels[i] += (target - levels[i]) * (active ? 0.24 : 0.05)
-        if (s.vizMode !== 'globe') {
+        if (s.vizMode !== 'globe' && s.vizMode !== 'scope') {
           const bh = 2 + levels[i] * h * 0.68
           ctx.fillStyle = i % 9 === 0 ? '#790d18' : '#142b83'
           ctx.fillRect(i * step + 2 + shift, h - bh - 12, Math.max(2, step - 4), bh)
         }
       }
-      if (s.vizMode !== 'spectrum') {
+      if (s.vizMode === 'scope') {
+        ctx.lineWidth = 1.6
+        for (const [color, offset, amp] of [['#142b83', 0, 1], ['#790d18', 4, 0.72]] as Array<[string, number, number]>) {
+          ctx.strokeStyle = color
+          ctx.beginPath()
+          for (let x = 0; x <= w; x += 2) {
+            const idx = wave ? Math.min(wave.length - 1, Math.floor((x / w) * wave.length)) : 0
+            const sample = active && wave ? ((wave[idx] - 128) / 128) * amp : Math.sin(x / 34 + time / 700) * 0.03
+            const y = h * 0.46 + offset + sample * h * 0.34
+            if (x === 0) ctx.moveTo(x, y)
+            else ctx.lineTo(x, y)
+          }
+          ctx.stroke()
+        }
+        ctx.lineWidth = 1
+      }
+      if (s.vizMode === 'globe' || s.vizMode === 'hybrid') {
         const cx = w * 0.5 + shift
         const cy = h * 0.4
         const r = Math.min(w, h) * 0.25
@@ -750,8 +798,14 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     const treble = context.createBiquadFilter()
     treble.type = 'highshelf'
     treble.frequency.value = 5200
+    const compressor = context.createDynamicsCompressor()
+    compressor.threshold.value = settingsRef.current.compressor ? settingsRef.current.compressorThreshold : 0
+    compressor.knee.value = settingsRef.current.compressor ? 12 : 0
+    compressor.ratio.value = settingsRef.current.compressor ? settingsRef.current.compressorRatio : 1
+    compressor.attack.value = 0.004
+    compressor.release.value = 0.18
     const master = context.createGain()
-    master.gain.value = settingsRef.current.muted ? 0 : settingsRef.current.volume
+    master.gain.value = settingsRef.current.muted ? 0 : settingsRef.current.volume * dbToGain(settingsRef.current.makeup)
 
     try {
       const sourceA = context.createMediaElementSource(audio)
@@ -766,11 +820,13 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       gainB.connect(bass)
       bass.connect(mid)
       mid.connect(treble)
-      treble.connect(analyser)
+      treble.connect(compressor)
+      compressor.connect(analyser)
       analyser.connect(master)
       master.connect(context.destination)
       gainsRef.current = { a: gainA, b: gainB }
       filtersRef.current = { bass, mid, treble }
+      compressorRef.current = compressor
       masterGainRef.current = master
       audioCtxRef.current = context
       analyserRef.current = analyser
@@ -976,12 +1032,22 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   async function loadCatalog() {
     setCatalogLoading(true)
     try {
-      const res = await fetch('/api/catalog')
-      if (!res.ok) throw new Error('catalog offline')
-      const data = (await res.json()) as { tracks?: CatalogTrack[] }
+      const params = new URLSearchParams({ sort: catalogSort })
+      if (catalogQuery.trim()) params.set('q', catalogQuery.trim())
+      const [listRes, statsRes] = await Promise.all([
+        fetch(`/api/catalog?${params.toString()}`),
+        fetch('/api/stats'),
+      ])
+      if (!listRes.ok) throw new Error('catalog offline')
+      const data = (await listRes.json()) as { tracks?: CatalogTrack[] }
       setCatalog(data.tracks ?? [])
+      if (statsRes.ok) {
+        const stats = (await statsRes.json()) as { likes?: number }
+        setCatalogLikes(Number(stats.likes ?? 0))
+      }
     } catch {
       setCatalog([])
+      setCatalogLikes(0)
       notify('Network index unavailable.')
     } finally {
       setCatalogLoading(false)
@@ -1111,6 +1177,26 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     a.click()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     notify('Library metadata exported.')
+  }
+  function exportPlaylist() {
+    const pl = playlists.find(p => p.id === selectedPlaylistId)
+    if (!pl) { notify('Select a playlist first.'); return }
+    const lines = ['#EXTM3U']
+    for (const id of pl.trackIds) {
+      const t = tracks.find(x => x.id === id)
+      if (!t) continue
+      const seconds = Math.round((t.duration || 0) / 1000)
+      const fileName = (t.blob as File | undefined)?.name || `${t.name}.${(t.format || 'mp3').toLowerCase()}`
+      lines.push(`#EXTINF:${seconds},${t.artist} - ${t.name}`, fileName)
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'audio/x-mpegurl;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${pl.name.replace(/[^a-z0-9_-]+/gi, '_') || 'playlist'}.m3u`
+    a.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    notify(`Playlist exported: ${pl.name}`)
   }
   function openPopup(kind: PopupKind) {
     const x = kind === 'ie' ? 520 : kind === 'favorites' ? 560 : 420
@@ -1253,9 +1339,55 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <p>Two audio engines overlap the end of one track with the start of the next.</p>
         </section>
         <section className="li-settings__group">
+          <h3>// DYNAMICS</h3>
+          <label className="li-check">
+            <input type="checkbox" checked={settings.compressor} onChange={e => setSettings(s => ({ ...s, compressor: e.target.checked }))} />
+            <span>COMPRESSOR / LIMITER</span>
+          </label>
+          <label className="li-setting-row">
+            <span>THRESHOLD</span>
+            <input
+              className="li-range"
+              type="range"
+              min={-30}
+              max={-6}
+              step={1}
+              value={settings.compressorThreshold}
+              onChange={e => setSettings(s => ({ ...s, compressorThreshold: Number(e.target.value) }))}
+            />
+            <span>{settings.compressorThreshold}dB</span>
+          </label>
+          <label className="li-setting-row">
+            <span>RATIO</span>
+            <input
+              className="li-range"
+              type="range"
+              min={1}
+              max={12}
+              step={0.5}
+              value={settings.compressorRatio}
+              onChange={e => setSettings(s => ({ ...s, compressorRatio: Number(e.target.value) }))}
+            />
+            <span>{settings.compressorRatio}:1</span>
+          </label>
+          <label className="li-setting-row">
+            <span>MAKEUP</span>
+            <input
+              className="li-range"
+              type="range"
+              min={0}
+              max={6}
+              step={0.5}
+              value={settings.makeup}
+              onChange={e => setSettings(s => ({ ...s, makeup: Number(e.target.value) }))}
+            />
+            <span>+{settings.makeup.toFixed(1)}</span>
+          </label>
+        </section>
+        <section className="li-settings__group">
           <h3>// VISUALIZER</h3>
           <div className="li-segmented">
-            {(['spectrum', 'globe', 'hybrid'] as VizMode[]).map(mode => (
+            {(['spectrum', 'globe', 'hybrid', 'scope'] as VizMode[]).map(mode => (
               <button key={mode} className={settings.vizMode === mode ? 'is-active' : ''} onClick={() => setSettings(s => ({ ...s, vizMode: mode }))}>{mode.toUpperCase()}</button>
             ))}
           </div>
@@ -1330,8 +1462,20 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       <div className="li-panel li-network">
         <div className="li-network__head">
           <span>// PUBLIC INDEX</span>
-          <span>{catalogLoading ? 'SCANNING...' : `${catalog.length} ENTRIES`}</span>
+          <span>{catalogLoading ? 'SCANNING...' : `${catalog.length} ENTRIES / ${catalogLikes} LIKES`}</span>
           <button className="li-btn" onClick={() => { void loadCatalog() }}>REFRESH</button>
+        </div>
+        <div className="li-network__tools">
+          <input
+            className="li-network__search"
+            placeholder="search public index..."
+            value={catalogQuery}
+            onChange={e => setCatalogQuery(e.target.value)}
+          />
+          <div className="li-segmented li-network__sort">
+            <button className={catalogSort === 'recent' ? 'is-active' : ''} onClick={() => setCatalogSort('recent')}>NEW</button>
+            <button className={catalogSort === 'likes' ? 'is-active' : ''} onClick={() => setCatalogSort('likes')}>TOP</button>
+          </div>
         </div>
         <p className="li-network__note">Metadata only. Audio files stay on each user's device. Publish a local track with PUB, then anyone can see it here.</p>
         <div className="li-network__list">
@@ -1367,6 +1511,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         { label: 'Add Files...', action: () => fileRef.current?.click() },
         { label: 'Add Folder...', action: () => folderRef.current?.click() },
         { label: 'Export Metadata', action: exportLibrary },
+        { label: 'Export Playlist (.m3u)', action: exportPlaylist },
         { label: 'Clear Archive', action: () => { void clearArchive() }, danger: true },
       ],
       view: [
@@ -1604,9 +1749,11 @@ function HelpPopupBody() {
     ['SPACE', 'play / pause'],
     ['N / P', 'next / previous'],
     ['M', 'mute'],
+    ['[ / ]', 'volume down / up'],
+    ['F', 'favorite current track'],
     ['S', 'shuffle'],
     ['R', 'repeat off / all / one'],
-    ['1 / 2 / 3', 'visualizer mode'],
+    ['1 / 2 / 3 / 4', 'visualizer mode'],
     ['H', 'this help'],
     ['CTRL+O', 'add files'],
     ['CTRL+F', 'search library'],

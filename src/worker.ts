@@ -11,7 +11,11 @@ const CORS: Record<string, string> = {
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' },
+    headers: {
+      ...CORS,
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
   })
 }
 
@@ -31,15 +35,33 @@ export default {
       return json({ ok: true, service: 'lost-internet-catalog' })
     }
 
-    if (!url.pathname.startsWith('/api/catalog')) {
+    if (!url.pathname.startsWith('/api/')) {
       return json({ error: 'not found' }, 404)
     }
 
     try {
-      if (url.pathname === '/api/catalog' && request.method === 'GET') {
+      if (url.pathname === '/api/stats' && request.method === 'GET') {
         const result = await env.lost_internet_catalog.prepare(
-          'SELECT id, title, artist, album, genre, format, duration, likes, created_at FROM catalog_tracks ORDER BY created_at DESC LIMIT 200'
-        ).all()
+          'SELECT COUNT(*) AS tracks, COALESCE(SUM(likes), 0) AS likes, COUNT(DISTINCT artist) AS artists FROM catalog_tracks'
+        ).first()
+        return json(result ?? { tracks: 0, likes: 0, artists: 0 })
+      }
+
+      if (url.pathname === '/api/catalog' && request.method === 'GET') {
+        const q = clean(url.searchParams.get('q'), 80)
+        const sort = url.searchParams.get('sort') === 'likes'
+          ? 'likes DESC, created_at DESC'
+          : 'created_at DESC'
+        const params: string[] = []
+        let sql = 'SELECT id, title, artist, album, genre, format, duration, likes, created_at FROM catalog_tracks'
+        if (q) {
+          sql += ' WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR genre LIKE ?'
+          const term = `%${q}%`
+          params.push(term, term, term, term)
+        }
+        sql += ` ORDER BY ${sort} LIMIT 200`
+        const statement = env.lost_internet_catalog.prepare(sql)
+        const result = await (params.length ? statement.bind(...params) : statement).all()
         return json({ tracks: result.results ?? [] })
       }
 

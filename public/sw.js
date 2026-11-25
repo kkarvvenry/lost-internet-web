@@ -1,4 +1,4 @@
-const CACHE = 'lost-internet-v4'
+const CACHE = 'lost-internet-v5'
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg']
 
 self.addEventListener('install', (event) => {
@@ -23,6 +23,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url)
   if (url.origin !== self.location.origin) return
+  if (url.pathname.startsWith('/api/')) return
 
   if (request.mode === 'navigate') {
     event.respondWith(
