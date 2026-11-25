@@ -2,6 +2,11 @@
 
 ## 2026-11-25
 
+### `6825589` — CI auto-deploy with the existing Cloudflare token secret
+- Workflow принимает API-токен из `CLOUDFLARE_API_TOKEN` или из уже созданного `LOST_INTERNET_CL`.
+- Account ID перенесён в `wrangler.jsonc`, отдельный секрет `CLOUDFLARE_ACCOUNT_ID` больше не нужен.
+- Обновлены README и DEPLOY: для автодеплоя достаточно одного repository secret с токеном.
+
 ### `e3bd73e` — Visual package: marquee, NEW badge, CRT overlay and RU/EN UI
 - Внизу интерфейса появилась бегущая строка с приветствием, счётчиком посетителей, числом локальных файлов и записей публичного индекса.
 - Записи публичного каталога моложе 7 дней получают мигающий бейдж `NEW!`.
