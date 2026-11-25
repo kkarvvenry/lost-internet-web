@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type UIEvent as ReactUIEvent } from 'react'
 import { uid, fmt, fmtBytes, clamp, dbToGain, parseName } from '../lib/format'
 import { VIRTUALIZE_THRESHOLD, tableWindow } from '../lib/table'
+import { translate, type Language } from '../lib/i18n'
 import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
@@ -31,6 +32,7 @@ type Settings = {
   calm: boolean
   showPopups: boolean
   theme: 'dark' | 'light'
+  language: Language
 }
 type Track = {
   id: string
@@ -95,6 +97,7 @@ const DEFAULT_SETTINGS: Settings = {
   calm: false,
   showPopups: true,
   theme: 'dark',
+  language: 'en',
 }
 const EQ_PRESETS: Record<EqPreset, { bass: number; mid: number; treble: number }> = {
   flat: { bass: 0, mid: 0, treble: 0 },
@@ -352,6 +355,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     try { theme = localStorage.getItem('lost-internet-theme') === 'light' ? 'light' : 'dark' } catch { /* storage unavailable */ }
     return { ...DEFAULT_SETTINGS, theme }
   })
+  const tr = (text: string) => translate(settings.language, text)
   const [section, setSection] = useState<Section>('library')
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>('p1')
   const [query, setQuery] = useState('')
@@ -603,6 +607,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               treble: Number(savedEq.treble ?? DEFAULT_SETTINGS.eq.treble) || 0,
             },
             theme: savedSettings.theme === 'light' ? 'light' : 'dark',
+            language: savedSettings.language === 'ru' ? 'ru' : 'en',
           })
         }
         if (Array.isArray(savedPlaylists) && savedPlaylists.length) {
@@ -1665,6 +1670,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           ...saved,
           eq: { ...DEFAULT_SETTINGS.eq, ...(saved.eq ?? {}) },
           theme: saved.theme === 'light' ? 'light' : 'dark',
+          language: saved.language === 'ru' ? 'ru' : 'en',
         })
       }
       let failed = 0
@@ -1751,7 +1757,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
 
   function sortableHeader(field: SortField, label: string) {
     const active = section === 'playlist' ? playlistSort : sort
-    return <button className="li-thbtn" onClick={() => toggleSort(field)}>{label}{active?.field === field ? (active.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>
+    return <button className="li-thbtn" onClick={() => toggleSort(field)}>{tr(label)}{active?.field === field ? (active.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>
   }
   function renderTable() {
     const virtualized = visibleTracks.length > VIRTUALIZE_THRESHOLD
@@ -1777,7 +1783,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               <th>{sortableHeader('album', 'ALBUM')}</th>
               <th>{sortableHeader('duration', 'TIME')}</th>
               <th>{sortableHeader('plays', 'PLAYS')}</th>
-              <th>ACTIONS</th>
+              <th>{tr('ACTIONS')}</th>
             </tr>
           </thead>
           <tbody>
@@ -1840,7 +1846,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     return (
       <div className="li-panel li-settings">
         <section className="li-settings__group">
-          <h3>// EQUALIZER</h3>
+          <h3>{tr('// EQUALIZER')}</h3>
           <div className="li-segmented">
             {(['flat', 'bass', 'vocal', 'night'] as EqPreset[]).map(preset => (
               <button key={preset} className={settings.eqPreset === preset ? 'is-active' : ''} aria-pressed={settings.eqPreset === preset} onClick={() => setSettings(s => ({ ...s, eqPreset: preset, eq: { ...EQ_PRESETS[preset] } }))}>{preset.toUpperCase()}</button>
@@ -1863,7 +1869,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           ))}
         </section>
         <section className="li-settings__group">
-          <h3>// CROSSFADE</h3>
+          <h3>{tr('// CROSSFADE')}</h3>
           <label className="li-check">
             <input type="checkbox" checked={settings.crossfade} onChange={e => setSettings(s => ({ ...s, crossfade: e.target.checked }))} />
             <span>SEAMLESS TRACK TRANSITIONS</span>
@@ -1884,7 +1890,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <p>Two audio engines overlap the end of one track with the start of the next.</p>
         </section>
         <section className="li-settings__group">
-          <h3>// DYNAMICS</h3>
+          <h3>{tr('// DYNAMICS')}</h3>
           <label className="li-check">
             <input type="checkbox" checked={settings.compressor} onChange={e => setSettings(s => ({ ...s, compressor: e.target.checked }))} />
             <span>COMPRESSOR / LIMITER</span>
@@ -1930,7 +1936,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           </label>
         </section>
         <section className="li-settings__group">
-          <h3>// VISUALIZER</h3>
+          <h3>{tr('// VISUALIZER')}</h3>
           <div className="li-segmented">
             {(['spectrum', 'globe', 'hybrid', 'scope'] as VizMode[]).map(mode => (
               <button key={mode} className={settings.vizMode === mode ? 'is-active' : ''} aria-pressed={settings.vizMode === mode} onClick={() => setSettings(s => ({ ...s, vizMode: mode }))}>{mode.toUpperCase()}</button>
@@ -1943,15 +1949,23 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           </label>
         </section>
         <section className="li-settings__group">
-          <h3>// THEME</h3>
+          <h3>{tr('// THEME')}</h3>
           <div className="li-segmented">
             {(['dark', 'light'] as const).map(theme => (
-              <button key={theme} className={settings.theme === theme ? 'is-active' : ''} aria-pressed={settings.theme === theme} onClick={() => setSettings(s => ({ ...s, theme }))}>{theme.toUpperCase()}</button>
+              <button key={theme} className={settings.theme === theme ? 'is-active' : ''} aria-pressed={settings.theme === theme} onClick={() => setSettings(s => ({ ...s, theme }))}>{tr(theme.toUpperCase())}</button>
             ))}
           </div>
         </section>
         <section className="li-settings__group">
-          <h3>// ATMOSPHERE</h3>
+          <h3>{tr('// LANGUAGE')}</h3>
+          <div className="li-segmented">
+            {(['en', 'ru'] as const).map(language => (
+              <button key={language} className={settings.language === language ? 'is-active' : ''} aria-pressed={settings.language === language} onClick={() => setSettings(s => ({ ...s, language }))}>{language.toUpperCase()}</button>
+            ))}
+          </div>
+        </section>
+        <section className="li-settings__group">
+          <h3>{tr('// ATMOSPHERE')}</h3>
           {([
             ['scanlines', 'CRT SCANLINES'],
             ['grain', 'FILM GRAIN'],
@@ -1961,20 +1975,22 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           ] as Array<[keyof Settings, string]>).map(([key, label]) => (
             <label className="li-check" key={String(key)}>
               <input type="checkbox" checked={Boolean(settings[key])} onChange={e => setSettings(s => ({ ...s, [key]: e.target.checked }))} />
-              <span>{label}</span>
+              <span>{tr(label)}</span>
             </label>
           ))}
         </section>
         <section className="li-settings__group">
-          <h3>// ARCHIVE</h3>
-          <p>{tracks.length} tracks stored in this browser via IndexedDB. Audio files are never uploaded.</p>
+          <h3>{tr('// ARCHIVE')}</h3>
+          <p>{settings.language === 'ru'
+            ? `${tracks.length} треков хранится в этом браузере через IndexedDB. Аудиофайлы никогда не загружаются.`
+            : `${tracks.length} tracks stored in this browser via IndexedDB. Audio files are never uploaded.`}</p>
           {storageUsage && storageUsage.quota > 0 && (
-            <p>STORAGE: {fmtBytes(storageUsage.used)} / {fmtBytes(storageUsage.quota)} ({Math.round((storageUsage.used / storageUsage.quota) * 100)}%)</p>
+            <p>{settings.language === 'ru' ? 'ХРАНИЛИЩЕ' : 'STORAGE'}: {fmtBytes(storageUsage.used)} / {fmtBytes(storageUsage.quota)} ({Math.round((storageUsage.used / storageUsage.quota) * 100)}%)</p>
           )}
           <div className="li-setting-actions">
-            <button className="li-btn" onClick={exportLibrary}>EXPORT METADATA</button>
-            <button className="li-btn" onClick={() => backupRef.current?.click()}>IMPORT METADATA</button>
-            <button className="li-btn li-btn--danger" onClick={() => { void clearArchive() }}>CLEAR ARCHIVE</button>
+            <button className="li-btn" onClick={exportLibrary}>{tr('EXPORT METADATA')}</button>
+            <button className="li-btn" onClick={() => backupRef.current?.click()}>{tr('IMPORT METADATA')}</button>
+            <button className="li-btn li-btn--danger" onClick={() => { void clearArchive() }}>{tr('CLEAR ARCHIVE')}</button>
           </div>
         </section>
       </div>
@@ -2018,9 +2034,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     return (
       <div className="li-panel li-network">
         <div className="li-network__head">
-          <span>// PUBLIC INDEX</span>
-          <span>{catalogLoading ? 'SCANNING...' : `${catalog.length} ENTRIES / ${catalogLikes} LIKES`}</span>
-          <button className="li-btn" onClick={() => { void loadCatalog() }}>REFRESH</button>
+          <span>{tr('// PUBLIC INDEX')}</span>
+          <span>{catalogLoading ? tr('SCANNING...') : `${catalog.length} ${tr('ENTRIES')} / ${catalogLikes} ${tr('LIKES')}`}</span>
+          <button className="li-btn" onClick={() => { void loadCatalog() }}>{tr('REFRESH')}</button>
         </div>
         <div className="li-network__tools">
           <input
@@ -2035,12 +2051,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
             <button className={catalogSort === 'likes' ? 'is-active' : ''} aria-pressed={catalogSort === 'likes'} onClick={() => setCatalogSort('likes')}>TOP</button>
           </div>
         </div>
-        <p className="li-network__note">Metadata only. Audio files stay on each user's device. Publish a local track with PUB, then anyone can see it here.</p>
+        <p className="li-network__note">{tr("Metadata only. Audio files stay on each user's device. Publish a local track with PUB, then anyone can see it here.")}</p>
         <div className="li-network__list">
           {catalog.map((item, i) => (
             <div className="li-network__row" key={item.id}>
               <span>{String(i + 1).padStart(2, '0')}</span>
-              <span title={item.title}>{item.title}</span>
+              <span title={item.title}>{item.title}{Date.now() - Number(item.created_at) < 7 * 86400000 && <span className="li-new" aria-label={tr('New')}>NEW!</span>}</span>
               <span title={item.artist}>{item.artist}</span>
               <span title={item.album}>{item.album || '-'}</span>
               <span>{item.format || '--'}</span>
@@ -2057,7 +2073,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               </span>
             </div>
           ))}
-          {!catalog.length && !catalogLoading && <div className="li-empty">Public index is empty. Publish a local track with PUB.</div>}
+          {!catalog.length && !catalogLoading && <div className="li-empty">{tr('Public index is empty. Publish a local track with PUB.')}</div>}
         </div>
       </div>
     )
@@ -2109,12 +2125,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           className={`li-menu ${openMenu === id ? 'is-open' : ''}`}
           onClick={() => setOpenMenu(openMenu === id ? null : id)}
         >
-          {MENUS.find(m => m.id === id)?.label}
+          {tr(MENUS.find(m => m.id === id)?.label ?? '')}
         </button>
         {openMenu === id && (
           <div className="li-menu-pop">
             {items[id].map(item => (
-              <button key={item.label} className={item.danger ? 'is-danger' : ''} onClick={() => menuAction(item.action)}>{item.label}</button>
+              <button key={item.label} className={item.danger ? 'is-danger' : ''} onClick={() => menuAction(item.action)}>{tr(item.label)}</button>
             ))}
           </div>
         )}
@@ -2133,6 +2149,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     busy ? 'is-busy' : '',
   ].filter(Boolean).join(' ')
   const topPopupId = popups.length ? popups.reduce((best, p) => p.z > best.z ? p : best).id : null
+  const marqueeText = `${tr('WELCOME TO LOST INTERNET')} // ${tr('VISITORS: 000001337')} // ${tr('LOCAL FILES')}: ${tracks.length} // ${tr('PUBLIC INDEX')}: ${catalog.length} ${tr('ENTRIES')} // ${tr('MUSIC IS THE ONLY REAL THING')} // `
 
   return (
     <div
@@ -2160,6 +2177,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <span className="li-titlebar__title">lost_internet.exe</span>
           <span className="li-titlebar__tag">v1.0 // LOCAL BUILD</span>
           <div className="li-titlebar__spacer" />
+          <button className="li-winbtn" title="Switch language RU / EN" aria-label="Switch language" onClick={e => { if (e.detail > 1) return; setSettings(s => ({ ...s, language: s.language === 'en' ? 'ru' : 'en' })) }}>{settings.language === 'en' ? 'EN' : 'RU'}</button>
           <button className="li-winbtn" title="Keyboard shortcuts (H)" aria-label="Keyboard shortcuts" onClick={e => { if (e.detail > 1) return; openPopup('help') }}>?</button>
           <button className="li-winbtn" title="Toggle theme (T)" aria-label="Toggle theme" onClick={e => { if (e.detail > 1) return; setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' })) }}>◐</button>
           <button className="li-winbtn" title="Toggle sidebar" aria-label="Toggle sidebar" onClick={e => { if (e.detail > 1) return; setSidebarCollapsed(v => !v) }}>_</button>
@@ -2173,8 +2191,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <span className="li-label">ADDR</span>
           <input className="li-address" aria-label="Current address" value={`file://localhost/music/${section}/index.htm`} readOnly />
           <input className="li-search" placeholder="search library..." aria-label="Search library" value={query} onChange={e => setQuery(e.target.value)} />
-          <button className="li-btn" onClick={() => fileRef.current?.click()}>ADD FILES</button>
-          <button className="li-btn" onClick={() => folderRef.current?.click()}>ADD FOLDER</button>
+          <button className="li-btn" onClick={() => fileRef.current?.click()}>{tr('ADD FILES')}</button>
+          <button className="li-btn" onClick={() => folderRef.current?.click()}>{tr('ADD FOLDER')}</button>
           <input ref={fileRef} type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac" multiple hidden onChange={e => { void addFiles(e.target.files); e.target.value = '' }} />
           <input ref={folderRef} type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac" multiple hidden {...({ webkitdirectory: '', directory: '' } as any)} onChange={e => { void addFiles(e.target.files); e.target.value = '' }} />
           <input ref={backupRef} type="file" accept="application/json,.json" hidden onChange={e => { const file = e.target.files?.[0]; if (file) void importLibrary(file); e.target.value = '' }} />
@@ -2183,9 +2201,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         <div className="li-body">
           <aside className="li-sidebar">
             <div className="li-sidebar__head">// INDEX.HTM</div>
-            {SECTIONS.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} aria-current={section === s.id ? 'page' : undefined} onClick={() => selectSection(s.id)}>{s.label}</button>)}
+            {SECTIONS.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} aria-current={section === s.id ? 'page' : undefined} onClick={() => selectSection(s.id)}>{tr(s.label)}</button>)}
             <div className="li-divider" />
-            {SECONDARY.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} aria-current={section === s.id ? 'page' : undefined} onClick={() => selectSection(s.id)}>{s.label}</button>)}
+            {SECONDARY.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} aria-current={section === s.id ? 'page' : undefined} onClick={() => selectSection(s.id)}>{tr(s.label)}</button>)}
             <div className="li-sidebar__head li-sidebar__head--gap">// PLAYLISTS</div>
             <div className="li-playlists">
               {playlists.map(p => (
@@ -2262,13 +2280,17 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         <div className="li-status">
           <span className="li-status__dot" />
           <span>{status}</span>
-          <span className="li-status__right">MODE: {settings.vizMode.toUpperCase()} // {ready ? 'ARCHIVE READY' : 'LOADING...'}</span>
+          <span className="li-status__right">{tr('MODE')}: {settings.vizMode.toUpperCase()} // {ready ? tr('ARCHIVE READY') : tr('LOADING...')}</span>
+        </div>
+
+        <div className="li-marquee" aria-hidden="true">
+          <div className="li-marquee__track"><span>{marqueeText}</span><span>{marqueeText}</span></div>
         </div>
 
         {updateReady && (
           <div className="li-update" role="status">
-            <span>NEW BUILD READY // RELOAD TO APPLY</span>
-            <button className="li-btn" onClick={() => window.location.reload()}>RELOAD</button>
+            <span>{tr('NEW BUILD READY // RELOAD TO APPLY')}</span>
+            <button className="li-btn" onClick={() => window.location.reload()}>{tr('RELOAD')}</button>
           </div>
         )}
       </div>
@@ -2309,7 +2331,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 <span>music is the only real thing.</span>
               </div>
             )}
-            {p.kind === 'help' && <HelpPopupBody />}
+            {p.kind === 'help' && <HelpPopupBody tr={tr} />}
           </div>
         </div>
       ))}
@@ -2337,7 +2359,7 @@ function IePopupBody({ calm, onClose }: { calm: boolean; onClose: () => void }) 
   )
 }
 
-function HelpPopupBody() {
+function HelpPopupBody({ tr }: { tr: (text: string) => string }) {
   const groups: Array<{ title: string; rows: Array<[string, string]> }> = [
     {
       title: 'PLAYBACK',
@@ -2373,19 +2395,19 @@ function HelpPopupBody() {
   ]
   return (
     <div className="li-help" aria-label="Keyboard shortcuts">
-      <div className="li-help__head">keys.txt // HOTKEYS</div>
+      <div className="li-help__head">{tr('keys.txt // HOTKEYS')}</div>
       {groups.map(group => (
         <section className="li-help__group" key={group.title}>
-          <h4>// {group.title}</h4>
+          <h4>// {tr(group.title)}</h4>
           {group.rows.map(([key, label]) => (
             <div className="li-help__row" key={key}>
               <span>{key}</span>
-              <span>{label}</span>
+              <span>{tr(label)}</span>
             </div>
           ))}
         </section>
       ))}
-      <div className="li-help__foot">TAB // switch inside window &nbsp; ESC // close</div>
+      <div className="li-help__foot">{tr('TAB // switch inside window  ESC // close')}</div>
     </div>
   )
 }
