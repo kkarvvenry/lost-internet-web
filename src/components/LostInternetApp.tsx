@@ -415,6 +415,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const urlsRef = useRef<Map<string, string[]>>(new Map())
   const hydratedRef = useRef(false)
   const popupsSeededRef = useRef(false)
+  const popupIdsRef = useRef('')
+  const popupFocusRef = useRef<HTMLElement | null>(null)
   const zRef = useRef(20)
   const nextRef = useRef<(fromAuto?: boolean) => void>(() => {})
   const playTokenRef = useRef(0)
@@ -830,6 +832,24 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }, [ready, settings.showPopups])
 
   useEffect(() => {
+    const ids = popups.map(p => p.id).join('|')
+    const previous = popupIdsRef.current
+    const added = popups.find(p => !previous.split('|').includes(p.id))
+    if (added && !popupFocusRef.current) popupFocusRef.current = document.activeElement as HTMLElement | null
+    popupIdsRef.current = ids
+    if (added) {
+      const top = popups.reduce((best, p) => p.z > best.z ? p : best, added)
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLButtonElement>(`[data-popup-id="${top.id}"] .li-popup__close`)?.focus()
+      })
+    }
+    if (!popups.length && popupFocusRef.current) {
+      if (document.contains(popupFocusRef.current)) popupFocusRef.current.focus()
+      popupFocusRef.current = null
+    }
+  }, [popups])
+
+  useEffect(() => {
     const onResize = () => {
       setPopups(prev => prev.map(p => {
         const pos = clampPopupPos(p.kind, p.x, p.y)
@@ -853,7 +873,17 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     let gridH = 0
     let gridTheme = ''
     const gentle = reducedMotion || settings.calm
+    let fps = 60
+    let fpsFrames = 0
+    let fpsMark = 0
     const draw = (time: number) => {
+      if (!fpsMark) fpsMark = time
+      fpsFrames += 1
+      if (time - fpsMark >= 700) {
+        fps = Math.round((fpsFrames * 1000) / (time - fpsMark))
+        fpsFrames = 0
+        fpsMark = time
+      }
       const c = visRef.current
       if (!c || !ctx) return
       const cssW = c.clientWidth || 640
@@ -963,7 +993,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       }
       ctx.fillStyle = labelColor
       ctx.font = '10px Courier New'
-      ctx.fillText(`SPECTRUM // ${bins} BANDS // ${s.vizMode.toUpperCase()}`, 12, h - 8)
+      ctx.fillText(`SPECTRUM // ${bins} BANDS // ${s.vizMode.toUpperCase()} // ${fps}FPS`, 12, h - 8)
       ctx.textAlign = 'right'
       ctx.fillText(active ? 'SIGNAL:LOCK' : 'SIGNAL:IDLE', w - 12, h - 8)
       ctx.textAlign = 'left'
@@ -1659,7 +1689,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <h3>// EQUALIZER</h3>
           <div className="li-segmented">
             {(['flat', 'bass', 'vocal', 'night'] as EqPreset[]).map(preset => (
-              <button key={preset} className={settings.eqPreset === preset ? 'is-active' : ''} onClick={() => setSettings(s => ({ ...s, eqPreset: preset, eq: { ...EQ_PRESETS[preset] } }))}>{preset.toUpperCase()}</button>
+              <button key={preset} className={settings.eqPreset === preset ? 'is-active' : ''} aria-pressed={settings.eqPreset === preset} onClick={() => setSettings(s => ({ ...s, eqPreset: preset, eq: { ...EQ_PRESETS[preset] } }))}>{preset.toUpperCase()}</button>
             ))}
           </div>
           {([['bass', 'BASS'], ['mid', 'MID'], ['treble', 'TREBLE']] as Array<[keyof Settings['eq'], string]>).map(([key, label]) => (
@@ -1749,7 +1779,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <h3>// VISUALIZER</h3>
           <div className="li-segmented">
             {(['spectrum', 'globe', 'hybrid', 'scope'] as VizMode[]).map(mode => (
-              <button key={mode} className={settings.vizMode === mode ? 'is-active' : ''} onClick={() => setSettings(s => ({ ...s, vizMode: mode }))}>{mode.toUpperCase()}</button>
+              <button key={mode} className={settings.vizMode === mode ? 'is-active' : ''} aria-pressed={settings.vizMode === mode} onClick={() => setSettings(s => ({ ...s, vizMode: mode }))}>{mode.toUpperCase()}</button>
             ))}
           </div>
           <label className="li-setting-row">
@@ -1762,7 +1792,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <h3>// THEME</h3>
           <div className="li-segmented">
             {(['dark', 'light'] as const).map(theme => (
-              <button key={theme} className={settings.theme === theme ? 'is-active' : ''} onClick={() => setSettings(s => ({ ...s, theme }))}>{theme.toUpperCase()}</button>
+              <button key={theme} className={settings.theme === theme ? 'is-active' : ''} aria-pressed={settings.theme === theme} onClick={() => setSettings(s => ({ ...s, theme }))}>{theme.toUpperCase()}</button>
             ))}
           </div>
         </section>
@@ -1843,8 +1873,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
             onChange={e => setCatalogQuery(e.target.value)}
           />
           <div className="li-segmented li-network__sort">
-            <button className={catalogSort === 'recent' ? 'is-active' : ''} onClick={() => setCatalogSort('recent')}>NEW</button>
-            <button className={catalogSort === 'likes' ? 'is-active' : ''} onClick={() => setCatalogSort('likes')}>TOP</button>
+            <button className={catalogSort === 'recent' ? 'is-active' : ''} aria-pressed={catalogSort === 'recent'} onClick={() => setCatalogSort('recent')}>NEW</button>
+            <button className={catalogSort === 'likes' ? 'is-active' : ''} aria-pressed={catalogSort === 'likes'} onClick={() => setCatalogSort('likes')}>TOP</button>
           </div>
         </div>
         <p className="li-network__note">Metadata only. Audio files stay on each user's device. Publish a local track with PUB, then anyone can see it here.</p>
@@ -1991,13 +2021,13 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         <div className="li-body">
           <aside className="li-sidebar">
             <div className="li-sidebar__head">// INDEX.HTM</div>
-            {SECTIONS.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} onClick={() => selectSection(s.id)}>{s.label}</button>)}
+            {SECTIONS.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} aria-current={section === s.id ? 'page' : undefined} onClick={() => selectSection(s.id)}>{s.label}</button>)}
             <div className="li-divider" />
-            {SECONDARY.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} onClick={() => selectSection(s.id)}>{s.label}</button>)}
+            {SECONDARY.map(s => <button key={s.id} className={`li-nav ${section === s.id ? 'is-active' : ''}`} aria-current={section === s.id ? 'page' : undefined} onClick={() => selectSection(s.id)}>{s.label}</button>)}
             <div className="li-sidebar__head li-sidebar__head--gap">// PLAYLISTS</div>
             <div className="li-playlists">
               {playlists.map(p => (
-                <button key={p.id} className={`li-playlist ${selectedPlaylistId === p.id ? 'is-active' : ''}`} onClick={() => { setSelectedPlaylistId(p.id); setPlaylistSort(null); playUiTokenRef.current += 1; setSection('playlist') }}>
+                <button key={p.id} className={`li-playlist ${selectedPlaylistId === p.id ? 'is-active' : ''}`} aria-pressed={selectedPlaylistId === p.id} onClick={() => { setSelectedPlaylistId(p.id); setPlaylistSort(null); playUiTokenRef.current += 1; setSection('playlist') }}>
                   {p.name} [{p.trackIds.length}]
                 </button>
               ))}
@@ -2053,12 +2083,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 <span className="li-time">{fmt(duration)}</span>
               </div>
               <div className="li-buttons-row">
-                <button className={`li-ctrl ${settings.shuffle ? 'is-active' : ''}`} title="Shuffle (S)" onClick={() => setSettings(s => ({ ...s, shuffle: !s.shuffle }))}>SHUF</button>
+                <button className={`li-ctrl ${settings.shuffle ? 'is-active' : ''}`} title="Shuffle (S)" aria-pressed={settings.shuffle} onClick={() => setSettings(s => ({ ...s, shuffle: !s.shuffle }))}>SHUF</button>
                 <button className="li-ctrl" title="Previous (P)" onClick={handlePrev}>PREV</button>
                 <button className="li-ctrl li-ctrl--play" title="Play / Pause (Space)" onClick={togglePlay}>{playing ? 'PAUSE' : 'PLAY'}</button>
                 <button className="li-ctrl" title="Next (N)" onClick={handleNext}>NEXT</button>
-                <button className="li-ctrl" title="Repeat (R)" onClick={cycleRepeat}>REP:{settings.repeat.toUpperCase()}</button>
-                <button className={`li-ctrl ${settings.muted ? 'is-alert' : ''}`} title="Mute (M)" onClick={() => setSettings(s => ({ ...s, muted: !s.muted }))}>{settings.muted ? 'MUTE' : 'VOL'}</button>
+                <button className="li-ctrl" title="Repeat (R)" aria-label={`Repeat: ${settings.repeat}`} onClick={cycleRepeat}>REP:{settings.repeat.toUpperCase()}</button>
+                <button className={`li-ctrl ${settings.muted ? 'is-alert' : ''}`} title="Mute (M)" aria-pressed={settings.muted} onClick={() => setSettings(s => ({ ...s, muted: !s.muted }))}>{settings.muted ? 'MUTE' : 'VOL'}</button>
                 <div className="li-spacer" />
                 <input className="li-range li-vol" type="range" min={0} max={100} value={Math.round(settings.volume * 100)} onChange={e => setSettings(s => ({ ...s, volume: Number(e.target.value) / 100 }))} aria-label="Volume" />
                 <span className="li-time">{Math.round(settings.volume * 100)}%</span>
@@ -2080,6 +2110,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       {popups.map(p => (
         <div
           key={p.id}
+          data-popup-id={p.id}
           className="li-popup"
           role="dialog"
           aria-modal="false"
