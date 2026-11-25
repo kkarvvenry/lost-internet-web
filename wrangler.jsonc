@@ -1,10 +1,20 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "lost-internet-web",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-11-23",
+  "workers_dev": true,
+  "preview_urls": true,
   "observability": {
     "enabled": true
   },
+  "d1_databases": [
+    {
+      "binding": "lost_internet_catalog",
+      "database_name": "lost-internet-catalog",
+      "database_id": "48faeb42-93b9-42c6-976e-5c0decbea931"
+    }
+  ],
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application"

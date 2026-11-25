@@ -1,6 +1,6 @@
 # Публикация LOST INTERNET
 
-Приложение полностью клиентское. Сервер нужен только для раздачи статики; пользовательские аудиофайлы остаются в IndexedDB конкретного браузера.
+Приложение в основном клиентское: аудиофайлы остаются в IndexedDB конкретного браузера. Cloudflare Worker раздаёт статику и хранит только общий каталог метаданных в D1.
 
 **Рабощая ссылка:** https://lost-internet-web.stepanb249.workers.dev
 
@@ -20,10 +20,14 @@ https://lost-internet-web.stepanb249.workers.dev
 
 - `npm run build` создаёт `dist/`;
 - `public/_headers`, `manifest.webmanifest`, `icon.svg` и `sw.js` автоматически копируются в `dist/`; SPA-fallback включён через `not_found_handling: single-page-application`;
-- `wrangler.jsonc` уже настроен на деплой `dist/`;
+- `wrangler.jsonc` настроен на деплой `dist/`, Worker `src/worker.ts` и D1-базу `lost-internet-catalog`;
+- `migrations/0001_init.sql` создаёт таблицу `catalog_tracks`;
+- API: `GET /api/health`, `GET/POST /api/catalog`, `POST /api/catalog/:id/like`;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`;
 - сайт уже задеплоен и отвечает `200`.
+
+Локальный Express-сервер не знает про `/api/catalog`, поэтому раздел NETWORK локально будет офлайн. Для проверки API используйте живой Worker-адрес.
 
 ### Шаги
 

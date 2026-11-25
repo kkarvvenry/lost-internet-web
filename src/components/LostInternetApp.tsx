@@ -3,7 +3,8 @@ import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
 type VizMode = 'spectrum' | 'globe' | 'hybrid'
-type Section = 'now' | 'playlist' | 'library' | 'radio' | 'settings' | 'archive' | 'recent' | 'favorites' | 'unknown'
+type EqPreset = 'flat' | 'bass' | 'vocal' | 'night' | 'custom'
+type Section = 'now' | 'playlist' | 'library' | 'radio' | 'settings' | 'archive' | 'recent' | 'network' | 'favorites' | 'unknown'
 type SortField = 'name' | 'artist' | 'album' | 'duration' | 'plays' | 'addedAt' | 'lastPlayed'
 type MenuKind = 'file' | 'view' | 'playback' | 'help'
 type PopupKind = 'ie' | 'favorites' | 'about' | 'help'
@@ -14,6 +15,10 @@ type Settings = {
   repeat: RepeatMode
   vizMode: VizMode
   vizSensitivity: number
+  eq: { bass: number; mid: number; treble: number }
+  eqPreset: EqPreset
+  crossfade: boolean
+  crossfadeMs: number
   scanlines: boolean
   grain: boolean
   glitch: boolean
@@ -41,6 +46,17 @@ type Track = {
   addedAt: number
 }
 type Playlist = { id: string; name: string; trackIds: string[] }
+type CatalogTrack = {
+  id: string
+  title: string
+  artist: string
+  album: string
+  genre: string
+  format: string
+  duration: number
+  likes: number
+  created_at: number
+}
 type Popup = { id: string; kind: PopupKind; title: string; x: number; y: number; z: number }
 
 const DB_NAME = 'lost-internet-web'
@@ -58,11 +74,22 @@ const DEFAULT_SETTINGS: Settings = {
   repeat: 'off',
   vizMode: 'hybrid',
   vizSensitivity: 1,
+  eq: { bass: 0, mid: 0, treble: 0 },
+  eqPreset: 'flat',
+  crossfade: true,
+  crossfadeMs: 600,
   scanlines: true,
   grain: true,
   glitch: true,
   calm: false,
   showPopups: true,
+}
+const EQ_PRESETS: Record<EqPreset, { bass: number; mid: number; treble: number }> = {
+  flat: { bass: 0, mid: 0, treble: 0 },
+  bass: { bass: 9, mid: -2, treble: 1 },
+  vocal: { bass: -2, mid: 7, treble: 3 },
+  night: { bass: 4, mid: -4, treble: -6 },
+  custom: { bass: 0, mid: 0, treble: 0 },
 }
 const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: 'now', label: 'NOW PLAYING   >' },
@@ -72,6 +99,7 @@ const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: 'settings', label: 'SETTINGS' },
 ]
 const SECONDARY: Array<{ id: Section; label: string }> = [
+  { id: 'network', label: 'NETWORK' },
   { id: 'archive', label: 'ARCHIVE' },
   { id: 'recent', label: 'RECENT' },
   { id: 'favorites', label: 'FAVORITES' },
@@ -303,18 +331,28 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [toast, setToast] = useState('')
   const [busy, setBusy] = useState(false)
   const [dropActive, setDropActive] = useState(false)
+  const [catalog, setCatalog] = useState<CatalogTrack[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
   const [ready, setReady] = useState(false)
   const [glitchActive, setGlitchActive] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [reducedMotion, setReducedMotion] = useState(false)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const nextAudioRef = useRef<HTMLAudioElement | null>(null)
   const artRef = useRef<HTMLCanvasElement | null>(null)
   const visRef = useRef<HTMLCanvasElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const folderRef = useRef<HTMLInputElement | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
+  const filtersRef = useRef<{ bass: BiquadFilterNode; mid: BiquadFilterNode; treble: BiquadFilterNode } | null>(null)
+  const gainsRef = useRef<{ a: GainNode; b: GainNode } | null>(null)
+  const masterGainRef = useRef<GainNode | null>(null)
+  const activeSlotRef = useRef<'a' | 'b'>('a')
+  const pendingIdRef = useRef<string | null>(null)
+  const fadeRafRef = useRef<number | null>(null)
+  const fadeLevelsRef = useRef<{ a: number; b: number }>({ a: 1, b: 0 })
   const rafRef = useRef<number | null>(null)
   const levelsRef = useRef(new Float32Array(48))
   const urlsRef = useRef<string[]>([])
@@ -359,6 +397,51 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   visibleRef.current = visibleTracks
   nextRef.current = handleNext
 
+  function getActiveAudio() {
+    return activeSlotRef.current === 'a' ? audioRef.current : nextAudioRef.current
+  }
+  function getOtherAudio() {
+    return activeSlotRef.current === 'a' ? nextAudioRef.current : audioRef.current
+  }
+  function stopFade() {
+    if (fadeRafRef.current !== null) {
+      cancelAnimationFrame(fadeRafRef.current)
+      fadeRafRef.current = null
+    }
+  }
+  function setSlotLevel(slot: 'a' | 'b', level: number) {
+    const value = clamp(level, 0, 1)
+    fadeLevelsRef.current[slot] = value
+    const gain = gainsRef.current?.[slot]
+    if (gain) {
+      gain.gain.value = value
+      return
+    }
+    const el = slot === 'a' ? audioRef.current : nextAudioRef.current
+    if (el) el.volume = settingsRef.current.muted ? 0 : settingsRef.current.volume * value
+  }
+  function fadeSlots(from: 'a' | 'b', to: 'a' | 'b', ms: number) {
+    stopFade()
+    const fromStart = fadeLevelsRef.current[from]
+    const toStart = fadeLevelsRef.current[to]
+    const started = performance.now()
+    const duration = Math.max(100, ms)
+    const step = (now: number) => {
+      const t = clamp((now - started) / duration, 0, 1)
+      setSlotLevel(from, fromStart * (1 - t))
+      setSlotLevel(to, toStart + (1 - toStart) * t)
+      if (t < 1) {
+        fadeRafRef.current = requestAnimationFrame(step)
+        return
+      }
+      fadeRafRef.current = null
+      setSlotLevel(from, 0)
+      setSlotLevel(to, 1)
+      const old = from === 'a' ? audioRef.current : nextAudioRef.current
+      old?.pause()
+    }
+    fadeRafRef.current = requestAnimationFrame(step)
+  }
   function makeUrl(blob: Blob) {
     const url = URL.createObjectURL(blob)
     urlsRef.current.push(url)
@@ -429,23 +512,62 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   }, [toast])
 
   useEffect(() => {
-    const audio = audioRef.current
-    if (!audio) return
-    audio.volume = settings.volume
-    audio.muted = settings.muted
+    if (section === 'network') void loadCatalog()
+  }, [section])
+
+  useEffect(() => {
+    const level = settings.muted ? 0 : settings.volume
+    const master = masterGainRef.current
+    if (master) {
+      master.gain.value = level
+      for (const el of [audioRef.current, nextAudioRef.current]) {
+        if (el) { el.volume = 1; el.muted = false }
+      }
+    } else {
+      const a = audioRef.current
+      const b = nextAudioRef.current
+      if (a) a.volume = settings.muted ? 0 : settings.volume * fadeLevelsRef.current.a
+      if (b) b.volume = settings.muted ? 0 : settings.volume * fadeLevelsRef.current.b
+      if (a) a.muted = false
+      if (b) b.muted = false
+    }
   }, [settings.volume, settings.muted])
 
   useEffect(() => {
-    const audio = audioRef.current
-    if (!audio) return
-    const onTime = () => setProgress(audio.currentTime * 1000)
-    const onPlay = () => setPlaying(true)
-    const onPause = () => setPlaying(false)
-    const onEnded = () => nextRef.current()
-    const onLoaded = () => {
-      const d = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0
-      setDuration(d)
-      const t = tracksRef.current.find(x => x.id === currentIdRef.current)
+    const filters = filtersRef.current
+    if (!filters) return
+    filters.bass.gain.value = settings.eq.bass
+    filters.mid.gain.value = settings.eq.mid
+    filters.treble.gain.value = settings.eq.treble
+  }, [settings.eq])
+
+  useEffect(() => {
+    const elements = [audioRef.current, nextAudioRef.current].filter((el): el is HTMLAudioElement => Boolean(el))
+    const isActive = (el: HTMLAudioElement) => el === getActiveAudio()
+    const onTime = (event: Event) => {
+      const el = event.currentTarget as HTMLAudioElement
+      if (!isActive(el)) return
+      setProgress(el.currentTime * 1000)
+    }
+    const onPlay = (event: Event) => {
+      if (isActive(event.currentTarget as HTMLAudioElement)) setPlaying(true)
+    }
+    const onPause = (event: Event) => {
+      if (isActive(event.currentTarget as HTMLAudioElement)) setPlaying(false)
+    }
+    const onEnded = (event: Event) => {
+      const el = event.currentTarget as HTMLAudioElement
+      if (isActive(el)) nextRef.current()
+    }
+    const onLoaded = (event: Event) => {
+      const el = event.currentTarget as HTMLAudioElement
+      const trackId = pendingIdRef.current || currentIdRef.current
+      const d = Number.isFinite(el.duration) ? el.duration * 1000 : 0
+      if (isActive(el)) {
+        setDuration(d)
+        pendingIdRef.current = null
+      }
+      const t = tracksRef.current.find(x => x.id === trackId)
       if (t && d > 0) {
         const updated: Track = {
           ...t,
@@ -456,20 +578,26 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         void persistTrack(updated)
       }
     }
-    const onError = () => notify('Audio error. File may be unsupported or corrupted.')
-    audio.addEventListener('timeupdate', onTime)
-    audio.addEventListener('play', onPlay)
-    audio.addEventListener('pause', onPause)
-    audio.addEventListener('ended', onEnded)
-    audio.addEventListener('loadedmetadata', onLoaded)
-    audio.addEventListener('error', onError)
+    const onError = (event: Event) => {
+      if (isActive(event.currentTarget as HTMLAudioElement)) notify('Audio error. File may be unsupported or corrupted.')
+    }
+    for (const el of elements) {
+      el.addEventListener('timeupdate', onTime)
+      el.addEventListener('play', onPlay)
+      el.addEventListener('pause', onPause)
+      el.addEventListener('ended', onEnded)
+      el.addEventListener('loadedmetadata', onLoaded)
+      el.addEventListener('error', onError)
+    }
     return () => {
-      audio.removeEventListener('timeupdate', onTime)
-      audio.removeEventListener('play', onPlay)
-      audio.removeEventListener('pause', onPause)
-      audio.removeEventListener('ended', onEnded)
-      audio.removeEventListener('loadedmetadata', onLoaded)
-      audio.removeEventListener('error', onError)
+      for (const el of elements) {
+        el.removeEventListener('timeupdate', onTime)
+        el.removeEventListener('play', onPlay)
+        el.removeEventListener('pause', onPause)
+        el.removeEventListener('ended', onEnded)
+        el.removeEventListener('loadedmetadata', onLoaded)
+        el.removeEventListener('error', onError)
+      }
     }
   }, [])
 
@@ -603,19 +731,56 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
 
   function ensureAudioContext() {
     const audio = audioRef.current
-    if (!audio || audioCtxRef.current) return
+    const nextAudio = nextAudioRef.current
+    if (!audio || !nextAudio || audioCtxRef.current) return
     const Ctx = window.AudioContext || (window as any).webkitAudioContext
     if (!Ctx) return
     const context: AudioContext = new Ctx()
     const analyser = context.createAnalyser()
     analyser.fftSize = 512
     analyser.smoothingTimeConstant = 0.82
+
+    const bass = context.createBiquadFilter()
+    bass.type = 'lowshelf'
+    bass.frequency.value = 140
+    const mid = context.createBiquadFilter()
+    mid.type = 'peaking'
+    mid.frequency.value = 1100
+    mid.Q.value = 0.8
+    const treble = context.createBiquadFilter()
+    treble.type = 'highshelf'
+    treble.frequency.value = 5200
+    const master = context.createGain()
+    master.gain.value = settingsRef.current.muted ? 0 : settingsRef.current.volume
+
     try {
-      const source = context.createMediaElementSource(audio)
-      source.connect(analyser)
-      analyser.connect(context.destination)
+      const sourceA = context.createMediaElementSource(audio)
+      const sourceB = context.createMediaElementSource(nextAudio)
+      const gainA = context.createGain()
+      const gainB = context.createGain()
+      gainA.gain.value = fadeLevelsRef.current.a
+      gainB.gain.value = fadeLevelsRef.current.b
+      sourceA.connect(gainA)
+      sourceB.connect(gainB)
+      gainA.connect(bass)
+      gainB.connect(bass)
+      bass.connect(mid)
+      mid.connect(treble)
+      treble.connect(analyser)
+      analyser.connect(master)
+      master.connect(context.destination)
+      gainsRef.current = { a: gainA, b: gainB }
+      filtersRef.current = { bass, mid, treble }
+      masterGainRef.current = master
       audioCtxRef.current = context
       analyserRef.current = analyser
+      audio.volume = 1
+      nextAudio.volume = 1
+      audio.muted = false
+      nextAudio.muted = false
+      bass.gain.value = settingsRef.current.eq.bass
+      mid.gain.value = settingsRef.current.eq.mid
+      treble.gain.value = settingsRef.current.eq.treble
     } catch {
       analyserRef.current = analyser
     }
@@ -623,10 +788,13 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   function cycleRepeat() {
     setSettings(s => ({ ...s, repeat: s.repeat === 'off' ? 'all' : s.repeat === 'all' ? 'one' : 'off' }))
   }
-  function playTrack(id: string) {
+  function playTrack(id: string, allowFade = true) {
     const t = tracks.find(x => x.id === id)
-    const audio = audioRef.current
-    if (!t || !audio || !t.url) { notify('Track source is unavailable.'); return }
+    if (!t || !t.url) { notify('Track source is unavailable.'); return }
+    const active = getActiveAudio()
+    const other = getOtherAudio()
+    if (!active || !other) { notify('Audio output is unavailable.'); return }
+    const canFade = allowFade && settingsRef.current.crossfade && !active.paused && currentIdRef.current !== id
     setCurrentId(id)
     setSection('now')
     setProgress(0)
@@ -634,41 +802,82 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     setTracks(prev => prev.map(x => x.id === id ? { ...x, plays: (x.plays ?? 0) + 1, lastPlayed: now } : x))
     window.setTimeout(() => { void persistTrackById(id) }, 0)
     ensureAudioContext()
-    audio.src = t.url
     void audioCtxRef.current?.resume()
-    audio.play()
+
+    if (canFade) {
+      const from = activeSlotRef.current
+      const to = from === 'a' ? 'b' : 'a'
+      stopFade()
+      pendingIdRef.current = id
+      activeSlotRef.current = to
+      other.src = t.url
+      other.currentTime = 0
+      void other.play()
+        .then(() => notify(`Playing: ${t.artist} - ${t.name}`))
+        .catch(() => {
+          pendingIdRef.current = null
+          notify('Playback blocked by browser. Click PLAY again.')
+        })
+      fadeSlots(from, to, settingsRef.current.crossfadeMs)
+      return
+    }
+
+    stopFade()
+    setSlotLevel(activeSlotRef.current, 1)
+    const inactive = activeSlotRef.current === 'a' ? 'b' : 'a'
+    setSlotLevel(inactive, 0)
+    other.pause()
+    active.src = t.url
+    active.currentTime = 0
+    void active.play()
       .then(() => notify(`Playing: ${t.artist} - ${t.name}`))
       .catch(() => notify('Playback blocked by browser. Click PLAY again.'))
   }
   function togglePlay() {
-    const audio = audioRef.current
+    const audio = getActiveAudio()
     if (!audio) return
-    if (!current && visibleTracks[0]) { playTrack(visibleTracks[0].id); return }
+    if (!current && visibleTracks[0]) { playTrack(visibleTracks[0].id, false); return }
     if (!current) return
-    if (!audio.src) { ensureAudioContext(); audio.src = current.url; }
+    if (!audio.src) {
+      ensureAudioContext()
+      audio.src = current.url
+    }
     if (audio.paused) {
       ensureAudioContext()
       void audioCtxRef.current?.resume()
+      stopFade()
+      setSlotLevel(activeSlotRef.current, 1)
+      const inactive = activeSlotRef.current === 'a' ? 'b' : 'a'
+      setSlotLevel(inactive, 0)
       void audio.play().catch(() => notify('Playback blocked by browser.'))
-    } else audio.pause()
+    } else {
+      stopFade()
+      audio.pause()
+      getOtherAudio()?.pause()
+    }
   }
   function handleNext() {
     const list = visibleRef.current.length ? visibleRef.current : tracksRef.current
     if (!list.length) return
     const s = settingsRef.current
-    const audio = audioRef.current
+    const audio = getActiveAudio()
     if (s.repeat === 'one' && audio) { audio.currentTime = 0; void audio.play().catch(() => {}); return }
     const index = list.findIndex(t => t.id === currentIdRef.current)
     let next = s.shuffle ? Math.floor(Math.random() * list.length) : index + 1
     if (!s.shuffle && next >= list.length) {
       if (s.repeat === 'all') next = 0
-      else { audio?.pause(); return }
+      else {
+        stopFade()
+        audio?.pause()
+        getOtherAudio()?.pause()
+        return
+      }
     }
     if (s.shuffle && list.length > 1 && list[next]?.id === currentIdRef.current) next = (next + 1) % list.length
     if (list[next]) playTrack(list[next].id)
   }
   function handlePrev() {
-    const audio = audioRef.current
+    const audio = getActiveAudio()
     if (audio && audio.currentTime > 3) { audio.currentTime = 0; return }
     const list = visibleRef.current.length ? visibleRef.current : tracksRef.current
     if (!list.length) return
@@ -677,7 +886,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     if (list[prev]) playTrack(list[prev].id)
   }
   function seek(value: number) {
-    const audio = audioRef.current
+    const audio = getActiveAudio()
     if (audio && duration > 0) audio.currentTime = (value / 1000) * (duration / 1000)
   }
   async function addFiles(fileList: FileList | null) {
@@ -764,17 +973,79 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     a.click()
     notify(`Saved: ${fileName}`)
   }
+  async function loadCatalog() {
+    setCatalogLoading(true)
+    try {
+      const res = await fetch('/api/catalog')
+      if (!res.ok) throw new Error('catalog offline')
+      const data = (await res.json()) as { tracks?: CatalogTrack[] }
+      setCatalog(data.tracks ?? [])
+    } catch {
+      setCatalog([])
+      notify('Network index unavailable.')
+    } finally {
+      setCatalogLoading(false)
+    }
+  }
+  async function publishTrack(id: string) {
+    const t = tracksRef.current.find(x => x.id === id)
+    if (!t) return
+    try {
+      const res = await fetch('/api/catalog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: t.name,
+          artist: t.artist,
+          album: t.album,
+          genre: t.genre,
+          format: t.format,
+          duration: t.duration,
+        }),
+      })
+      if (!res.ok) throw new Error('publish failed')
+      notify(`Published: ${t.name}`)
+      await loadCatalog()
+    } catch {
+      notify('Publish failed. Network index unavailable.')
+    }
+  }
+  async function likeCatalogTrack(id: string) {
+    try {
+      const res = await fetch(`/api/catalog/${encodeURIComponent(id)}/like`, { method: 'POST' })
+      if (!res.ok) throw new Error('like failed')
+      setCatalog(prev => prev.map(t => t.id === id ? { ...t, likes: t.likes + 1 } : t))
+    } catch {
+      notify('Like failed. Network index unavailable.')
+    }
+  }
+  function playCatalogTrack(item: CatalogTrack) {
+    const title = item.title.trim().toLowerCase()
+    const artist = item.artist.trim().toLowerCase()
+    const match = tracks.find(t => t.name.trim().toLowerCase() === title && t.artist.trim().toLowerCase() === artist)
+      || tracks.find(t => t.name.trim().toLowerCase() === title)
+    if (match) playTrack(match.id)
+    else notify('Metadata only. Add a matching local file to play this entry.')
+  }
   async function removeTrack(id: string) {
     if (!window.confirm('Remove this track from the local archive?')) return
     setTracks(prev => prev.filter(t => t.id !== id))
     setPlaylists(prev => prev.map(p => ({ ...p, trackIds: p.trackIds.filter(x => x !== id) })))
-    if (currentId === id) { audioRef.current?.pause(); setCurrentId(null); setPlaying(false) }
+    if (currentId === id) {
+      stopFade()
+      audioRef.current?.pause()
+      nextAudioRef.current?.pause()
+      setCurrentId(null)
+      setPlaying(false)
+    }
     await dbDelete(STORE_TRACKS, id).catch(() => {})
     notify('Track removed from archive.')
   }
   async function clearArchive() {
     if (!window.confirm('Clear the entire local archive? This cannot be undone.')) return
+    stopFade()
     audioRef.current?.pause()
+    nextAudioRef.current?.pause()
     setTracks([])
     setCurrentId(null)
     setPlaying(false)
@@ -913,6 +1184,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                   <button className="li-btn li-btn--tiny" title="Favorite" onClick={() => toggleFavorite(t.id)}>{t.favorite ? '★' : '☆'}</button>
                   <button className="li-btn li-btn--tiny" title="Edit metadata" onClick={() => editTrack(t.id)}>EDIT</button>
                   <button className="li-btn li-btn--tiny" title="Download original file" onClick={() => downloadTrack(t.id)}>DL</button>
+                  <button className="li-btn li-btn--tiny" title="Publish metadata to public index" onClick={() => { void publishTrack(t.id) }}>PUB</button>
                   <button className="li-btn li-btn--tiny" title="Add to playlist" onClick={() => addToPlaylist(t.id)}>+PL</button>
                   {section === 'playlist' && (
                     <>
@@ -936,6 +1208,50 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   function renderSettings() {
     return (
       <div className="li-panel li-settings">
+        <section className="li-settings__group">
+          <h3>// EQUALIZER</h3>
+          <div className="li-segmented">
+            {(['flat', 'bass', 'vocal', 'night'] as EqPreset[]).map(preset => (
+              <button key={preset} className={settings.eqPreset === preset ? 'is-active' : ''} onClick={() => setSettings(s => ({ ...s, eqPreset: preset, eq: { ...EQ_PRESETS[preset] } }))}>{preset.toUpperCase()}</button>
+            ))}
+          </div>
+          {([['bass', 'BASS'], ['mid', 'MID'], ['treble', 'TREBLE']] as Array<[keyof Settings['eq'], string]>).map(([key, label]) => (
+            <label className="li-setting-row" key={key}>
+              <span>{label}</span>
+              <input
+                className="li-range"
+                type="range"
+                min={-12}
+                max={12}
+                step={1}
+                value={settings.eq[key]}
+                onChange={e => setSettings(s => ({ ...s, eqPreset: 'custom', eq: { ...s.eq, [key]: Number(e.target.value) } }))}
+              />
+              <span>{settings.eq[key] > 0 ? '+' : ''}{settings.eq[key]}dB</span>
+            </label>
+          ))}
+        </section>
+        <section className="li-settings__group">
+          <h3>// CROSSFADE</h3>
+          <label className="li-check">
+            <input type="checkbox" checked={settings.crossfade} onChange={e => setSettings(s => ({ ...s, crossfade: e.target.checked }))} />
+            <span>SEAMLESS TRACK TRANSITIONS</span>
+          </label>
+          <label className="li-setting-row">
+            <span>DURATION</span>
+            <input
+              className="li-range"
+              type="range"
+              min={200}
+              max={3000}
+              step={100}
+              value={settings.crossfadeMs}
+              onChange={e => setSettings(s => ({ ...s, crossfadeMs: Number(e.target.value) }))}
+            />
+            <span>{(settings.crossfadeMs / 1000).toFixed(1)}s</span>
+          </label>
+          <p>Two audio engines overlap the end of one track with the start of the next.</p>
+        </section>
         <section className="li-settings__group">
           <h3>// VISUALIZER</h3>
           <div className="li-segmented">
@@ -1009,10 +1325,40 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       </div>
     )
   }
+  function renderNetwork() {
+    return (
+      <div className="li-panel li-network">
+        <div className="li-network__head">
+          <span>// PUBLIC INDEX</span>
+          <span>{catalogLoading ? 'SCANNING...' : `${catalog.length} ENTRIES`}</span>
+          <button className="li-btn" onClick={() => { void loadCatalog() }}>REFRESH</button>
+        </div>
+        <p className="li-network__note">Metadata only. Audio files stay on each user's device. Publish a local track with PUB, then anyone can see it here.</p>
+        <div className="li-network__list">
+          {catalog.map((item, i) => (
+            <div className="li-network__row" key={item.id}>
+              <span>{String(i + 1).padStart(2, '0')}</span>
+              <span title={item.title}>{item.title}</span>
+              <span title={item.artist}>{item.artist}</span>
+              <span title={item.album}>{item.album || '-'}</span>
+              <span>{item.format || '--'}</span>
+              <span>{item.likes}</span>
+              <span>
+                <button className="li-btn li-btn--tiny" title="Play if you have the local file" onClick={() => playCatalogTrack(item)}>PLAY</button>
+                <button className="li-btn li-btn--tiny" title="Like" onClick={() => { void likeCatalogTrack(item.id) }}>+1</button>
+              </span>
+            </div>
+          ))}
+          {!catalog.length && !catalogLoading && <div className="li-empty">Public index is empty. Publish a local track with PUB.</div>}
+        </div>
+      </div>
+    )
+  }
   function sectionBody() {
     if (section === 'settings') return renderSettings()
     if (section === 'radio') return renderRadio()
     if (section === 'now') return renderNowPanel()
+    if (section === 'network') return renderNetwork()
     return renderTable()
   }
   function renderMenu(id: MenuKind) {
@@ -1232,6 +1578,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
 
       {toast && <div className="li-toast" role="status">{toast}</div>}
       <audio ref={audioRef} preload="metadata" />
+      <audio ref={nextAudioRef} preload="metadata" />
     </div>
   )
 }
