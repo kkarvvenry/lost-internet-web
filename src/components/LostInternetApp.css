@@ -1136,6 +1136,24 @@ html[data-theme='light'] ::selection {
   letter-spacing: 1px;
 }
 
+.li-update {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--li-white);
+  background: var(--li-red);
+  border-top: 1px solid var(--li-muted);
+}
+
+.li-update .li-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+}
+
 /* ---------- effects ---------- */
 .li-fx {
   position: fixed;

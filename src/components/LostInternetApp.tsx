@@ -386,6 +386,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [catalogLikes, setCatalogLikes] = useState(0)
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [ready, setReady] = useState(false)
+  const [updateReady, setUpdateReady] = useState(false)
   const [glitchActive, setGlitchActive] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [reducedMotion, setReducedMotion] = useState(false)
@@ -545,6 +546,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     void _url; void _artUrl
     await dbPut(STORE_TRACKS, stored)
   }
+
+  useEffect(() => {
+    const onUpdate = () => setUpdateReady(true)
+    window.addEventListener('lost-internet-update', onUpdate)
+    return () => window.removeEventListener('lost-internet-update', onUpdate)
+  }, [])
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -2102,6 +2109,13 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <span>{status}</span>
           <span className="li-status__right">MODE: {settings.vizMode.toUpperCase()} // {ready ? 'ARCHIVE READY' : 'LOADING...'}</span>
         </div>
+
+        {updateReady && (
+          <div className="li-update" role="status">
+            <span>NEW BUILD READY // RELOAD TO APPLY</span>
+            <button className="li-btn" onClick={() => window.location.reload()}>RELOAD</button>
+          </div>
+        )}
       </div>
 
       <div className="li-fx li-fx--scan" aria-hidden="true" />
