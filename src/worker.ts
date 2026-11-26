@@ -346,8 +346,7 @@ export default {
           } | null
           if (!pending || pending.expires_at <= Date.now()) return spotifyFail()
           await env.lost_internet_catalog.prepare('DELETE FROM spotify_oauth_states WHERE state = ?').bind(state).run()
-          const account = await accountFromRequest(request, env)
-          if (!account || account.id !== pending.account_id || !env.SPOTIFY_CLIENT_ID) return spotifyFail()
+          if (!env.SPOTIFY_CLIENT_ID) return spotifyFail()
           const body = new URLSearchParams({
             grant_type: 'authorization_code',
             code,
@@ -360,11 +359,18 @@ export default {
             headers: spotifyTokenHeaders(env),
             body,
           })
-          if (!tokenResponse.ok) return spotifyFail()
+          if (!tokenResponse.ok) {
+            const detail = await tokenResponse.text().catch(() => '')
+            console.error({ event: 'spotify_token_exchange_failed', status: tokenResponse.status, detail: detail.slice(0, 300) })
+            return spotifyFail()
+          }
           const tokenData = await tokenResponse.json() as {
             access_token?: string; refresh_token?: string; expires_in?: number; scope?: string
           }
-          if (!tokenData.access_token || !tokenData.refresh_token) return spotifyFail()
+          if (!tokenData.access_token || !tokenData.refresh_token) {
+            console.error({ event: 'spotify_token_incomplete' })
+            return spotifyFail()
+          }
           let profileId = ''
           let displayName = ''
           try {
@@ -385,7 +391,7 @@ export default {
             + 'refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, '
             + 'scope = excluded.scope, connected_at = excluded.connected_at'
           ).bind(
-            account.id,
+            pending.account_id,
             profileId,
             displayName,
             tokenData.access_token,
