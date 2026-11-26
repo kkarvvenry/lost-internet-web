@@ -26,6 +26,7 @@ Dark Webcore / Y2K локальный музыкальный плеер с по�
 - интерфейс RU / EN: переключатель в titlebar и в `SETTINGS // LANGUAGE`, выбор сохраняется вместе с остальными настройками; справка и статусы тоже переводятся;
 - привязки к внешним сервисам: кнопка `WEB` на треке открывает окно `links.txt` с поиском по Yandex Music, Spotify, YouTube Music, Bandcamp, SoundCloud и MusicBrainz; прямые ссылки сохраняются локально в метаданных трека, для публичных записей доступен только поиск; сервис по умолчанию выбирается в `SETTINGS // INTEGRATIONS`;
 - импорт плейлистов Spotify и Яндекс.Музыки в разделе NETWORK: Worker загружает только метаданные треков, приложение ищет совпадения среди локальных файлов по названию и артисту и кнопкой `ADD MATCHED` добавляет их в плейлист; аудио не скачивается и не загружается на сервер; лимит — 20 импортов с IP в сутки;
+- аккаунты для всех посетителей: регистрация и вход по email/паролю через Worker, сессии в HttpOnly-cookie, пароли хранятся только как PBKDF2-хэши в D1; у каждого аккаунта свой локальный архив в IndexedDB, а настройки, плейлисты, избранное и внешние ссылки можно сохранить в аккаунт и загрузить обратно; никаких ключей от пользователя не требуется;
 - перетаскиваемые popup-окна Internet Explorer, Favorites, About, Help, links.txt; справка открывается кнопкой `?` или `H`, верхнее окно удерживает фокус внутри себя;
 - меню File / View / Playback / Help, экспорт и импорт метаданных, очистка архива;
 - горячие клавиши: Space, N, P, M, [ / ], F, S, R, H, T, 1/2/3/4, Ctrl+O, Ctrl+F, Ctrl+Left/Right, Esc;
@@ -50,7 +51,7 @@ npm start
 ## Проверки
 
 ```bash
-npm test     # unit-тесты форматирования, виртуализации таблицы, i18n, внешних ссылок, импорта плейлистов и rate limit Worker
+npm test     # unit-тесты форматирования, виртуализации таблицы, i18n, внешних ссылок, импорта плейлистов, аккаунтов и rate limit Worker
 npm run smoke # проверка живого сайта, ассетов, PWA и API
 npm run verify # build + test + smoke
 ```
@@ -80,20 +81,21 @@ cloudflared tunnel --url http://localhost:5173
 
 Для постоянного домена используйте named tunnel или деплой `dist` на Netlify/Vercel/любой статический хостинг. Подробности — `DEPLOY.md`.
 
-Важно: каждый пользователь добавляет свои аудиофайлы в свой браузер. Сам аудио не загружается на сервер — через общий NETWORK-индекс передаются только метаданные (название, артист, альбом, жанр, формат, длительность, лайки).
+Важно: каждый пользователь добавляет свои аудиофайлы в свой браузер. Сам аудио не загружается на сервер — через общий NETWORK-индекс передаются только метаданные (название, артист, альбом, жанр, формат, длительность, лайки). Аккаунт хранит только настройки, плейлисты, избранное и ссылки; при входе на другом устройстве локальные аудиофайлы нужно добавить заново — совпадения ищутся по названию и артисту.
 
 ## Структура
 
 - `src/App.tsx` — точка входа React, рендерит только `LostInternetApp`;
 - `src/components/LostInternetApp.tsx` — всё приложение;
 - `src/components/LostInternetApp.css` — стили;
-- `src/worker.ts` — Cloudflare Worker с API `/api/health`, `/api/stats`, `/api/catalog`, `/api/catalog/:id/like`, `/api/integrations/playlist`;
+- `src/worker.ts` — Cloudflare Worker с API `/api/health`, `/api/stats`, `/api/catalog`, `/api/catalog/:id/like`, `/api/integrations/playlist`, `/api/auth/*`, `/api/user/data`;
 - `migrations/0001_init.sql` — схема D1 для общего каталога;
 - `migrations/0002_like_hits.sql` — защита от повторных лайков с одного адреса в сутки;
 - `migrations/0003_catalog_likes_index.sql` — индекс для сортировки NETWORK по лайкам;
 - `migrations/0004_publish_hits.sql` — дневной лимит публикаций с одного адреса;
 - `migrations/0005_integration_hits.sql` — дневной лимит импорта плейлистов;
-- `src/lib/format.ts`, `src/lib/table.ts`, `src/lib/i18n.ts`, `src/lib/links.ts`, `src/lib/integrations.ts`, `src/lib/match.ts` — чистые хелперы, покрытые unit-тестами;
+- `migrations/0006_accounts.sql` — аккаунты, сессии, облачные данные и лимит попыток входа;
+- `src/lib/format.ts`, `src/lib/table.ts`, `src/lib/i18n.ts`, `src/lib/links.ts`, `src/lib/integrations.ts`, `src/lib/match.ts`, `src/lib/account.ts` — чистые хелперы, покрытые unit-тестами;
 - `scripts/smoke.mjs` — smoke-проверка публичного деплоя;
 - `.github/workflows/ci.yml` — проверки и автодеплой;
 - `wrangler.jsonc` — деплой и привязка D1;

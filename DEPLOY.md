@@ -26,10 +26,12 @@ https://lost-internet-web.stepanb249.workers.dev
 - `migrations/0003_catalog_likes_index.sql` добавляет индекс для быстрой сортировки по лайкам;
 - `migrations/0004_publish_hits.sql` добавляет таблицу дневного лимита публикаций (10 с IP);
 - `migrations/0005_integration_hits.sql` добавляет таблицу дневного лимита импорта плейлистов (20 с IP);
-- API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`, `POST /api/integrations/playlist`;
+- `migrations/0006_accounts.sql` добавляет таблицы аккаунтов, сессий, облачных данных и лимита попыток входа;
+- API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`, `POST /api/integrations/playlist`, `GET /api/auth/me`, `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET|PUT /api/user/data`;
 - интерфейс переводится между RU и EN переключателем в titlebar или в `SETTINGS // LANGUAGE`, выбор сохраняется в IndexedDB;
 - привязки к Yandex Music, Spotify, YouTube Music, Bandcamp, SoundCloud и MusicBrainz работают полностью на стороне браузера: ничего дополнительно деплоить и никакие ключи не нужны;
 - импорт плейлистов Spotify/Яндекс.Музыки работает через Worker и требует секретов (см. ниже); в каталог и в IndexedDB попадают только метаданные треков;
+- аккаунты работают без дополнительных секретов: пароли хэшируются PBKDF2, сессии хранятся в D1 и передаются через HttpOnly-cookie;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`;
 - сайт уже задеплоен и отвечает `200`.
@@ -101,6 +103,20 @@ npx --yes wrangler@4.168.0 secret put YANDEX_MUSIC_TOKEN
 ```powershell
 Invoke-RestMethod -Uri 'https://lost-internet-web.stepanb249.workers.dev/api/integrations/playlist' -Method Post -ContentType 'application/json' -Body '{"provider":"spotify","url":"https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"}'
 ```
+
+### Аккаунты посетителей
+
+Миграция `0006_accounts.sql` уже применена к рабочей базе. Для нового проекта:
+
+```powershell
+npx --yes wrangler@4.168.0 d1 execute lost-internet-catalog --remote --file=migrations/0006_accounts.sql
+```
+
+Регистрация и вход доступны каждому посетителю через кнопку `LOGIN` в titlebar. Worker хранит в D1 только email, PBKDF2-хэш пароля, сессионные токены и JSON с настройками/плейлистами/ссылками. Секреты и ключи для этого не нужны; лимит — 15 попыток входа/регистрации с IP в сутки.
+
+Локальный архив аудио разделён по аккаунтам: для гостя используется база `lost-internet-web`, для вошедшего — `lost-internet-web-<id аккаунта>`. Аудио остаётся в IndexedDB браузера. Кнопки `SAVE TO ACCOUNT` и `LOAD FROM ACCOUNT` в окне `account.txt` синхронизируют только метаданные: настройки, плейлисты, избранное и ссылки. При входе на другом устройстве файлы нужно добавить заново — совпадения ищутся по названию и артисту.
+
+Локальный Express-прокси передаёт заголовки `Cookie`/`Set-Cookie` и снимает флаг `Secure` с cookie, если открыт обычный `http://localhost`, поэтому вход работает и при `npm run dev`.
 
 Проверить токен локально можно так:
 

@@ -95,6 +95,28 @@ export const UI_RU: Record<string, string> = {
   'NEW BUILD READY // RELOAD TO APPLY': 'НОВАЯ СБОРКА ГОТОВА // ПЕРЕЗАГРУЗИТЕСЬ',
   RELOAD: 'ПЕРЕЗАГРУЗИТЬ',
 
+  // accounts
+  LOGIN: 'ВХОД',
+  'SIGN IN': 'ВОЙТИ',
+  'CREATE ACCOUNT': 'СОЗДАТЬ АККАУНТ',
+  ACCOUNT: 'АККАУНТ',
+  EMAIL: 'EMAIL',
+  'DISPLAY NAME': 'ИМЯ',
+  PASSWORD: 'ПАРОЛЬ',
+  'WORKING...': 'РАБОТАЕМ...',
+  'SAVE TO ACCOUNT': 'СОХРАНИТЬ В АККАУНТ',
+  'LOAD FROM ACCOUNT': 'ЗАГРУЗИТЬ ИЗ АККАУНТА',
+  'LOG OUT': 'ВЫЙТИ',
+  'Account created.': 'Аккаунт создан.',
+  'Welcome back.': 'С возвращением.',
+  'Logged out.': 'Вы вышли из аккаунта.',
+  'Saved to your account.': 'Сохранено в аккаунте.',
+  'Cloud sync failed.': 'Не удалось синхронизировать аккаунт.',
+  'Cloud sync unavailable.': 'Синхронизация аккаунта недоступна.',
+  'Account service is unreachable.': 'Сервис аккаунтов недоступен.',
+  'Your audio files stay in this browser. Settings, playlists and links can be stored in your account.': 'Аудиофайлы остаются в этом браузере. Настройки, плейлисты и ссылки можно сохранить в аккаунте.',
+  'Each account has its own local archive on this device. No passwords are sent to the chat or stored in the browser.': 'У каждого аккаунта свой локальный архив на этом устройстве. Пароли не сохраняются в браузере и никуда не отправляются, кроме сервера аккаунтов.',
+
   // playlist import
   '// IMPORT PLAYLIST': '// ИМПОРТ ПЛЕЙЛИСТА',
   'Playlist URL': 'Ссылка на плейлист',

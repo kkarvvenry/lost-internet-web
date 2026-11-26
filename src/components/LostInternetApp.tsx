@@ -5,6 +5,7 @@ import { translate, type Language } from '../lib/i18n'
 import { PROVIDERS, buildSearchQuery, buildSearchUrl, isProviderId, normalizeServiceUrl, sanitizeLinks, type ProviderId, type TrackLinks } from '../lib/links'
 import { matchScore } from '../lib/match'
 import type { IntegrationProvider, IntegrationTrack } from '../lib/integrations'
+import { sanitizeAccountData, sanitizeSettings, type Account, type AccountTrackRef } from '../lib/account'
 import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
@@ -13,7 +14,7 @@ type EqPreset = 'flat' | 'bass' | 'vocal' | 'night' | 'custom'
 type Section = 'now' | 'playlist' | 'library' | 'radio' | 'settings' | 'archive' | 'recent' | 'network' | 'favorites' | 'unknown'
 type SortField = 'name' | 'artist' | 'album' | 'duration' | 'plays' | 'addedAt' | 'lastPlayed'
 type MenuKind = 'file' | 'view' | 'playback' | 'help'
-type PopupKind = 'ie' | 'favorites' | 'about' | 'help' | 'links'
+type PopupKind = 'ie' | 'favorites' | 'about' | 'help' | 'links' | 'account'
 type Settings = {
   volume: number
   muted: boolean
@@ -112,6 +113,14 @@ const EQ_PRESETS: Record<EqPreset, { bass: number; mid: number; treble: number }
   night: { bass: 4, mid: -4, treble: -6 },
   custom: { bass: 0, mid: 0, treble: 0 },
 }
+function normalizeSettings(saved: unknown): Settings {
+  const clean = sanitizeSettings(saved)
+  return {
+    ...DEFAULT_SETTINGS,
+    ...clean,
+    eq: { ...DEFAULT_SETTINGS.eq, ...(clean.eq as Partial<Settings['eq']> | undefined) },
+  } as Settings
+}
 const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: 'now', label: 'NOW PLAYING   >' },
   { id: 'playlist', label: 'PLAYLIST' },
@@ -133,21 +142,31 @@ const MENUS: Array<{ id: MenuKind; label: string }> = [
   { id: 'help', label: 'Help' },
 ]
 const EMPTY_LINKS: TrackLinks = {}
-const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320, help: 420, links: 440 }
-const POPUP_HEIGHT: Record<PopupKind, number> = { ie: 150, favorites: 180, about: 200, help: 440, links: 480 }
+const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320, help: 420, links: 440, account: 400 }
+const POPUP_HEIGHT: Record<PopupKind, number> = { ie: 150, favorites: 180, about: 200, help: 440, links: 480, account: 420 }
 const POPUP_TITLE: Record<PopupKind, string> = {
   ie: 'Internet Explorer',
   favorites: '★ Favorites',
   about: 'about_lost_internet.txt',
   help: 'keys.txt',
   links: 'links.txt',
+  account: 'account.txt',
 }
 
+let activeDbName = DB_NAME
 let dbPromise: Promise<IDBDatabase> | null = null
+function setDatabaseName(name: string) {
+  if (name === activeDbName) return
+  activeDbName = name
+  dbPromise = null
+}
+function dbNameFor(accountId: string): string {
+  return `${DB_NAME}-${accountId.slice(0, 40)}`
+}
 function openDb(): Promise<IDBDatabase> {
   if (!dbPromise) {
     dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VER)
+      const req = indexedDB.open(activeDbName, DB_VER)
       req.onupgradeneeded = () => {
         const db = req.result
         if (!db.objectStoreNames.contains(STORE_TRACKS)) db.createObjectStore(STORE_TRACKS, { keyPath: 'id' })
@@ -381,6 +400,14 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [importResults, setImportResults] = useState<IntegrationTrack[]>([])
   const [importBusy, setImportBusy] = useState(false)
   const [importError, setImportError] = useState('')
+  const [account, setAccount] = useState<Account | null>(null)
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authName, setAuthName] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authError, setAuthError] = useState('')
+  const [cloudBusy, setCloudBusy] = useState(false)
   const [openMenu, setOpenMenu] = useState<MenuKind | null>(null)
   const [status, setStatus] = useState('Ready. Drop into the archive.')
   const [toast, setToast] = useState('')
@@ -601,51 +628,55 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     return () => query.removeEventListener?.('change', sync)
   }, [])
 
+  async function loadArchive() {
+    setReady(false)
+    hydratedOkRef.current = true
+    try {
+      const meta = await dbGetAll<{ key: string; value: any }>(STORE_META)
+      const savedSettings = meta.find(m => m.key === KEY_SETTINGS)?.value
+      const savedPlaylists = meta.find(m => m.key === KEY_PLAYLISTS)?.value
+      const lastTrack = meta.find(m => m.key === KEY_LAST_TRACK)?.value
+      if (savedSettings) setSettings(normalizeSettings(savedSettings))
+      if (Array.isArray(savedPlaylists) && savedPlaylists.length) {
+        setPlaylists(savedPlaylists)
+        setSelectedPlaylistId(savedPlaylists[0].id)
+      }
+      const stored = await dbGetAll<any>(STORE_TRACKS)
+      const hydrated: Track[] = stored.map(t => ({
+        ...t,
+        url: t.blob ? makeUrl(t.blob, t.id) : t.url,
+        artUrl: t.artBlob ? makeUrl(t.artBlob, t.id) : undefined,
+        plays: Number(t.plays ?? 0),
+        lastPlayed: Number(t.lastPlayed ?? 0),
+      }))
+      setTracks(hydrated.sort((a, b) => Number(b.addedAt) - Number(a.addedAt)))
+      tracksRef.current = hydrated.sort((a, b) => Number(b.addedAt) - Number(a.addedAt))
+      if (lastTrack && hydrated.some(t => t.id === lastTrack)) setCurrentId(lastTrack)
+      notify(`Loaded ${hydrated.length} track${hydrated.length === 1 ? '' : 's'} from archive.`)
+    } catch {
+      hydratedOkRef.current = false
+      notify('Archive unavailable. Running in memory mode.')
+    } finally {
+      setReady(true)
+    }
+  }
+
   useEffect(() => {
     if (hydratedRef.current) return
     hydratedRef.current = true
     ;(async () => {
+      let signedIn: Account | null = null
       try {
-        const meta = await dbGetAll<{ key: string; value: any }>(STORE_META)
-        const savedSettings = meta.find(m => m.key === KEY_SETTINGS)?.value
-        const savedPlaylists = meta.find(m => m.key === KEY_PLAYLISTS)?.value
-        const lastTrack = meta.find(m => m.key === KEY_LAST_TRACK)?.value
-        if (savedSettings) {
-          const savedEq = savedSettings.eq ?? {}
-          setSettings({
-            ...DEFAULT_SETTINGS,
-            ...savedSettings,
-            eq: {
-              bass: Number(savedEq.bass ?? DEFAULT_SETTINGS.eq.bass) || 0,
-              mid: Number(savedEq.mid ?? DEFAULT_SETTINGS.eq.mid) || 0,
-              treble: Number(savedEq.treble ?? DEFAULT_SETTINGS.eq.treble) || 0,
-            },
-            theme: savedSettings.theme === 'light' ? 'light' : 'dark',
-            language: savedSettings.language === 'ru' ? 'ru' : 'en',
-            defaultProvider: isProviderId(savedSettings.defaultProvider) ? savedSettings.defaultProvider : 'yandex',
-          })
+        const response = await fetch('/api/auth/me')
+        const data = (await response.json().catch(() => ({}))) as { account?: Account }
+        if (response.ok && data.account && typeof data.account.id === 'string') {
+          signedIn = data.account
+          setDatabaseName(dbNameFor(signedIn.id))
+          setAccount(signedIn)
         }
-        if (Array.isArray(savedPlaylists) && savedPlaylists.length) {
-          setPlaylists(savedPlaylists)
-          setSelectedPlaylistId(savedPlaylists[0].id)
-        }
-        const stored = await dbGetAll<any>(STORE_TRACKS)
-        const hydrated: Track[] = stored.map(t => ({
-          ...t,
-          url: t.blob ? makeUrl(t.blob, t.id) : t.url,
-          artUrl: t.artBlob ? makeUrl(t.artBlob, t.id) : undefined,
-          plays: Number(t.plays ?? 0),
-          lastPlayed: Number(t.lastPlayed ?? 0),
-        }))
-        setTracks(hydrated.sort((a, b) => Number(b.addedAt) - Number(a.addedAt)))
-        if (lastTrack && hydrated.some(t => t.id === lastTrack)) setCurrentId(lastTrack)
-        notify(`Loaded ${hydrated.length} track${hydrated.length === 1 ? '' : 's'} from archive.`)
-      } catch {
-        hydratedOkRef.current = false
-        notify('Archive unavailable. Running in memory mode.')
-      } finally {
-        setReady(true)
-      }
+      } catch { /* guest mode */ }
+      await loadArchive()
+      if (signedIn) await loadCloudData()
     })()
   }, [])
 
@@ -1536,6 +1567,161 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     }
     return best?.id ?? null
   }
+  function trackRef(track: Track): AccountTrackRef {
+    return { id: track.id, title: track.name, artist: track.artist, album: track.album, duration: track.duration }
+  }
+  function findRefTrack(ref: AccountTrackRef): Track | undefined {
+    const exact = tracksRef.current.find(t => t.id === ref.id)
+    if (exact) return exact
+    let best: { track: Track; score: number } | null = null
+    for (const track of tracksRef.current) {
+      const score = matchScore({ title: ref.title, artist: ref.artist }, { title: track.name, artist: track.artist })
+      if (score < 3 || (best && score <= best.score)) continue
+      best = { track, score }
+    }
+    return best?.track
+  }
+  async function loadCloudData() {
+    if (!account) return
+    setCloudBusy(true)
+    try {
+      const response = await fetch('/api/user/data')
+      if (!response.ok) return
+      const data = (await response.json().catch(() => ({}))) as { payload?: unknown }
+      applyCloudData(sanitizeAccountData(data.payload))
+    } catch {
+      notify(tr('Cloud sync unavailable.'))
+    } finally {
+      setCloudBusy(false)
+    }
+  }
+  function applyCloudData(payload: ReturnType<typeof sanitizeAccountData>) {
+    if (Object.keys(payload.settings).length) setSettings(prev => normalizeSettings({ ...prev, ...payload.settings }))
+    if (payload.playlists.length) {
+      const next = payload.playlists.map(p => ({
+        id: p.id,
+        name: p.name,
+        trackIds: p.tracks.map(ref => findRefTrack(ref)?.id).filter((id): id is string => Boolean(id)),
+      }))
+      setPlaylists(next)
+      setSelectedPlaylistId(next[0]?.id ?? null)
+    }
+    const favoriteIds = new Set(payload.favorites.map(ref => findRefTrack(ref)?.id).filter((id): id is string => Boolean(id)))
+    if (payload.favorites.length) {
+      const changed: Track[] = []
+      const next = tracksRef.current.map(t => {
+        if (t.favorite === favoriteIds.has(t.id)) return t
+        const updated = { ...t, favorite: favoriteIds.has(t.id) }
+        changed.push(updated)
+        return updated
+      })
+      if (changed.length) {
+        tracksRef.current = next
+        setTracks(next)
+        void Promise.all(changed.map(t => persistTrack(t))).catch(() => warnStorage())
+      }
+    }
+    if (Object.keys(payload.links).length) {
+      const changed: Track[] = []
+      const next = tracksRef.current.map(t => {
+        const links = payload.links[t.id]
+        if (!links) return t
+        const updated = { ...t, links: links as Track['links'] }
+        changed.push(updated)
+        return updated
+      })
+      if (changed.length) {
+        tracksRef.current = next
+        setTracks(next)
+        void Promise.all(changed.map(t => persistTrack(t))).catch(() => warnStorage())
+      }
+    }
+  }
+  async function saveCloudData() {
+    if (!account || cloudBusy) return
+    setCloudBusy(true)
+    try {
+      const payload = {
+        settings,
+        playlists: playlists.map(p => ({
+          id: p.id,
+          name: p.name,
+          tracks: p.trackIds
+            .map(id => tracksRef.current.find(t => t.id === id))
+            .filter((t): t is Track => Boolean(t))
+            .map(trackRef),
+        })),
+        favorites: tracksRef.current.filter(t => t.favorite).map(trackRef),
+        links: Object.fromEntries(tracksRef.current.filter(t => t.links).map(t => [t.id, t.links])),
+      }
+      const response = await fetch('/api/user/data', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      notify(tr('Saved to your account.'))
+    } catch {
+      notify(tr('Cloud sync failed.'))
+    } finally {
+      setCloudBusy(false)
+    }
+  }
+  async function submitAuth(mode: 'login' | 'register', email: string, password: string, name: string) {
+    if (authBusy) return
+    setAuthBusy(true)
+    setAuthError('')
+    try {
+      const response = await fetch(`/api/auth/${mode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, displayName: name }),
+      })
+      const data = (await response.json().catch(() => ({}))) as { account?: Account; error?: string }
+      if (!response.ok || !data.account) {
+        setAuthError(data.error ?? `HTTP ${response.status}`)
+        return
+      }
+      for (const id of [...urlsRef.current.keys()]) revokeTrackUrls(id)
+      audioRef.current?.pause()
+      nextAudioRef.current?.pause()
+      setPlaying(false)
+      setCurrentId(null)
+      setProgress(0)
+      setDuration(0)
+      setAccount(data.account)
+      setDatabaseName(dbNameFor(data.account.id))
+      setPopups(prev => prev.filter(p => p.kind !== 'account'))
+      await loadArchive()
+      await loadCloudData()
+      notify(mode === 'register' ? tr('Account created.') : tr('Welcome back.'))
+    } catch {
+      setAuthError(tr('Account service is unreachable.'))
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+  async function logoutAccount() {
+    if (authBusy) return
+    setAuthBusy(true)
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+    } catch { /* local logout still works */ }
+    for (const id of [...urlsRef.current.keys()]) revokeTrackUrls(id)
+    audioRef.current?.pause()
+    nextAudioRef.current?.pause()
+    setPlaying(false)
+    setCurrentId(null)
+    setProgress(0)
+    setDuration(0)
+    setAccount(null)
+    setDatabaseName(DB_NAME)
+    setAuthError('')
+    setPopups(prev => prev.filter(p => p.kind !== 'account'))
+    await loadArchive()
+    notify(tr('Logged out.'))
+    setAuthBusy(false)
+  }
   async function importPlaylist() {
     const url = importUrl.trim()
     if (!url || importBusy) return
@@ -2325,6 +2511,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
           <span className="li-titlebar__title">lost_internet.exe</span>
           <span className="li-titlebar__tag">v1.0 // LOCAL BUILD</span>
           <div className="li-titlebar__spacer" />
+          <button
+            className="li-winbtn li-winbtn--account"
+            title={account ? `${tr('ACCOUNT')}: ${account.email}` : tr('SIGN IN')}
+            aria-label={account ? tr('ACCOUNT') : tr('SIGN IN')}
+            onClick={e => { if (e.detail > 1) return; setAuthError(''); openPopup('account') }}
+          >{account ? account.email.slice(0, 8) : tr('LOGIN')}</button>
           <button className="li-winbtn" title="Switch language RU / EN" aria-label="Switch language" onClick={e => { if (e.detail > 1) return; setSettings(s => ({ ...s, language: s.language === 'en' ? 'ru' : 'en' })) }}>{settings.language === 'en' ? 'EN' : 'RU'}</button>
           <button className="li-winbtn" title="Keyboard shortcuts (H)" aria-label="Keyboard shortcuts" onClick={e => { if (e.detail > 1) return; openPopup('help') }}>?</button>
           <button className="li-winbtn" title="Toggle theme (T)" aria-label="Toggle theme" onClick={e => { if (e.detail > 1) return; setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' })) }}>◐</button>
@@ -2491,6 +2683,26 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 onSave={saveTrackLink}
               />
             )}
+            {p.kind === 'account' && (
+              <AccountPopupBody
+                account={account}
+                mode={authMode}
+                email={authEmail}
+                password={authPassword}
+                name={authName}
+                busy={authBusy || cloudBusy}
+                error={authError}
+                tr={tr}
+                onMode={setAuthMode}
+                onEmail={setAuthEmail}
+                onPassword={setAuthPassword}
+                onName={setAuthName}
+                onSubmit={submitAuth}
+                onSave={saveCloudData}
+                onLoad={loadCloudData}
+                onLogout={logoutAccount}
+              />
+            )}
           </div>
         </div>
       ))}
@@ -2621,5 +2833,67 @@ function LinksPopupBody({ query, links, editable, defaultProvider, tr, onSave }:
       })}
       {!editable && <p>{tr('Search links only for public entries. Save links on your local tracks in LIBRARY.')}</p>}
     </div>
+  )
+}
+
+function AccountPopupBody({ account, mode, email, password, name, busy, error, tr, onMode, onEmail, onPassword, onName, onSubmit, onSave, onLoad, onLogout }: {
+  account: Account | null
+  mode: 'login' | 'register'
+  email: string
+  password: string
+  name: string
+  busy: boolean
+  error: string
+  tr: (text: string) => string
+  onMode: (mode: 'login' | 'register') => void
+  onEmail: (value: string) => void
+  onPassword: (value: string) => void
+  onName: (value: string) => void
+  onSubmit: (mode: 'login' | 'register', email: string, password: string, name: string) => void
+  onSave: () => void
+  onLoad: () => void
+  onLogout: () => void
+}) {
+  if (account) {
+    return (
+      <div className="li-account">
+        <div className="li-account__id">
+          <strong>{account.displayName || account.email}</strong>
+          <span>{account.email}</span>
+        </div>
+        <p>{tr('Your audio files stay in this browser. Settings, playlists and links can be stored in your account.')}</p>
+        <div className="li-account__actions">
+          <button className="li-btn" disabled={busy} onClick={onSave}>{busy ? tr('WORKING...') : tr('SAVE TO ACCOUNT')}</button>
+          <button className="li-btn" disabled={busy} onClick={onLoad}>{tr('LOAD FROM ACCOUNT')}</button>
+          <button className="li-btn" disabled={busy} onClick={onLogout}>{tr('LOG OUT')}</button>
+        </div>
+        {error && <p className="li-account__error">{error}</p>}
+      </div>
+    )
+  }
+  return (
+    <form className="li-account" onSubmit={e => { e.preventDefault(); onSubmit(mode, email, password, name) }}>
+      <div className="li-segmented">
+        <button type="button" className={mode === 'login' ? 'is-active' : ''} aria-pressed={mode === 'login'} onClick={() => onMode('login')}>{tr('SIGN IN')}</button>
+        <button type="button" className={mode === 'register' ? 'is-active' : ''} aria-pressed={mode === 'register'} onClick={() => onMode('register')}>{tr('CREATE ACCOUNT')}</button>
+      </div>
+      <label className="li-account__field">
+        <span>{tr('EMAIL')}</span>
+        <input className="li-input" type="email" autoComplete="email" required value={email} onChange={e => onEmail(e.target.value)} />
+      </label>
+      {mode === 'register' && (
+        <label className="li-account__field">
+          <span>{tr('DISPLAY NAME')}</span>
+          <input className="li-input" type="text" maxLength={60} value={name} onChange={e => onName(e.target.value)} />
+        </label>
+      )}
+      <label className="li-account__field">
+        <span>{tr('PASSWORD')}</span>
+        <input className="li-input" type="password" minLength={8} autoComplete={mode === 'register' ? 'new-password' : 'current-password'} required value={password} onChange={e => onPassword(e.target.value)} />
+      </label>
+      <button className="li-btn li-account__submit" type="submit" disabled={busy}>{busy ? tr('WORKING...') : tr(mode === 'register' ? 'CREATE ACCOUNT' : 'SIGN IN')}</button>
+      <p>{tr('Each account has its own local archive on this device. No passwords are sent to the chat or stored in the browser.')}</p>
+      {error && <p className="li-account__error">{error}</p>}
+    </form>
   )
 }

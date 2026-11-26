@@ -1515,6 +1515,68 @@ html[data-theme='light'] ::selection {
   font-size: 11px;
 }
 
+.li-winbtn--account {
+  min-width: 58px;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.li-account {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.li-account__id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  word-break: break-all;
+}
+
+.li-account__id strong {
+  color: var(--li-white);
+}
+
+.li-account__id span,
+.li-account p {
+  color: var(--li-silver);
+  font-size: 11px;
+}
+
+.li-account p {
+  margin: 0;
+}
+
+.li-account__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--li-silver);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.li-account__field .li-input {
+  width: 100%;
+}
+
+.li-account__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.li-account__submit {
+  align-self: flex-start;
+}
+
+.li-account__error {
+  color: var(--li-white) !important;
+}
+
 .li-ie {
   display: flex;
   flex-direction: column;

@@ -71,6 +71,18 @@ await check('unknown like returns 404', async () => {
   return '404'
 })
 
+await check('anonymous auth status', async () => {
+  const data = await getJson('/api/auth/me')
+  if (data.account !== null) throw new Error('unexpected account')
+  return 'guest'
+})
+
+await check('account data requires sign in', async () => {
+  const response = await fetch(`${base}/api/user/data`, { cache: 'no-store' })
+  if (response.status !== 401) throw new Error(`HTTP ${response.status}`)
+  return '401'
+})
+
 for (const result of checks) {
   console.log(`${result.ok ? 'OK  ' : 'FAIL'} ${result.name}: ${result.detail}`)
 }

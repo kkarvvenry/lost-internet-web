@@ -18,7 +18,7 @@ app.use('/api', express.raw({ type: '*/*', limit: '64kb' }))
 app.use('/api', async (req, res) => {
   try {
     const headers = {}
-    for (const name of ['content-type', 'accept', 'cf-connecting-ip', 'x-forwarded-for']) {
+    for (const name of ['content-type', 'accept', 'cookie', 'cf-connecting-ip', 'x-forwarded-for']) {
       const value = req.headers[name]
       if (typeof value === 'string') headers[name] = value
     }
@@ -30,6 +30,10 @@ app.use('/api', async (req, res) => {
     })
     const body = Buffer.from(await upstream.arrayBuffer())
     res.status(upstream.status)
+    const cookies = upstream.headers.getSetCookie?.() ?? []
+    for (const cookie of cookies) {
+      res.appendHeader('Set-Cookie', req.secure ? cookie : cookie.replace(/;\s*Secure/gi, ''))
+    }
     for (const name of [
       'Content-Type',
       'Cache-Control',
