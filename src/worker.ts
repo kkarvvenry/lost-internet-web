@@ -51,6 +51,18 @@ function clientIp(request: Request): string {
     || 'local'
 }
 
+async function enforceIntegrationLimit(request: Request, env: Env): Promise<Response | null> {
+  const ipHash = await hashValue(`integrations:${clientIp(request)}`)
+  const claim = await env.lost_internet_catalog.prepare(
+    'INSERT INTO integration_hits (day, ip_hash, count, created_at) VALUES (?, ?, 1, ?) '
+    + 'ON CONFLICT(day, ip_hash) DO UPDATE SET count = integration_hits.count + 1 RETURNING count'
+  ).bind(dayNumber(), ipHash, Date.now()).first()
+  if (Number(claim?.count ?? 0) > INTEGRATION_DAILY_LIMIT) {
+    return json({ error: 'import rate limit exceeded', limit: INTEGRATION_DAILY_LIMIT }, 429)
+  }
+  return null
+}
+
 async function spotifyToken(env: Env): Promise<string> {
   if (spotifyTokenCache && spotifyTokenCache.expiresAt > Date.now() + 30_000) return spotifyTokenCache.value
   const credentials = btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`)
@@ -175,21 +187,14 @@ export default {
         const link = clean(body.url, 500)
         if (!link) return json({ error: 'playlist URL is required' }, 400)
 
-        const ipHash = await hashValue(`integrations:${clientIp(request)}`)
-        const claim = await env.lost_internet_catalog.prepare(
-          'INSERT INTO integration_hits (day, ip_hash, count, created_at) VALUES (?, ?, 1, ?) '
-          + 'ON CONFLICT(day, ip_hash) DO UPDATE SET count = integration_hits.count + 1 RETURNING count'
-        ).bind(dayNumber(), ipHash, Date.now()).first()
-        if (Number(claim?.count ?? 0) > INTEGRATION_DAILY_LIMIT) {
-          return json({ error: 'import rate limit exceeded', limit: INTEGRATION_DAILY_LIMIT }, 429)
-        }
-
         if (provider === 'spotify') {
           if (!env.SPOTIFY_CLIENT_ID || !env.SPOTIFY_CLIENT_SECRET) {
             return json({ error: 'spotify credentials are not configured' }, 503)
           }
           const playlistId = parseSpotifyPlaylistUrl(link)
           if (!playlistId) return json({ error: 'invalid Spotify playlist URL' }, 400)
+          const limited = await enforceIntegrationLimit(request, env)
+          if (limited) return limited
           let token: string
           try {
             token = await spotifyToken(env)
@@ -211,6 +216,8 @@ export default {
         if (!env.YANDEX_MUSIC_TOKEN) return json({ error: 'yandex token is not configured' }, 503)
         const parsed = parseYandexPlaylistUrl(link)
         if (!parsed) return json({ error: 'invalid Yandex playlist URL' }, 400)
+        const limited = await enforceIntegrationLimit(request, env)
+        if (limited) return limited
         const response = await fetch(
           `https://api.music.yandex.net/users/${encodeURIComponent(parsed.uid)}/playlists/${encodeURIComponent(parsed.kind)}`,
           { headers: { Authorization: `OAuth ${env.YANDEX_MUSIC_TOKEN}`, 'X-Yandex-Music-Client': 'YandexMusicAPI' } },
