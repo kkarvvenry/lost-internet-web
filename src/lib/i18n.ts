@@ -126,6 +126,7 @@ export const UI_RU: Record<string, string> = {
   'SIGN IN TO LINK SPOTIFY': 'ВОЙДИТЕ, ЧТОБЫ ПРИВЯЗАТЬ SPOTIFY',
   'PERSONAL SPOTIFY': 'ЛИЧНЫЙ SPOTIFY',
   'SERVER SPOTIFY': 'СЕРВЕРНЫЙ SPOTIFY',
+  'PUBLIC SPOTIFY': 'ПУБЛИЧНЫЙ SPOTIFY',
   'Spotify connected.': 'Spotify подключён.',
   'Spotify connection failed.': 'Не удалось подключить Spotify.',
   'Spotify disconnected.': 'Spotify отключён.',

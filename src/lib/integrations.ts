@@ -76,6 +76,49 @@ export function mapSpotifyPage(json: unknown): { next: string | null; tracks: In
   return { next: typeof root.next === 'string' ? root.next : null, tracks }
 }
 
+type SpotifyEmbedTrack = {
+  uri?: unknown
+  title?: unknown
+  subtitle?: unknown
+  duration?: unknown
+}
+
+export async function fetchSpotifyEmbedTracks(playlistId: string): Promise<IntegrationTrack[]> {
+  const response = await fetch(`https://open.spotify.com/embed/playlist/${playlistId}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+  })
+  if (!response.ok) throw new Error(`embed status ${response.status}`)
+  const html = await response.text()
+  const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/)
+  if (!match) throw new Error('embed data missing')
+  const data = JSON.parse(match[1]) as {
+    props?: { pageProps?: { state?: { data?: { entity?: { trackList?: unknown[] } } } } }
+  }
+  const list = data.props?.pageProps?.state?.data?.entity?.trackList
+  if (!Array.isArray(list)) throw new Error('embed track list missing')
+  const tracks: IntegrationTrack[] = []
+  for (const item of list) {
+    const raw = record(item) as SpotifyEmbedTrack | null
+    const title = text(raw?.title)
+    if (!raw || !title) continue
+    const trackId = String(raw.uri ?? '').match(/^spotify:track:([A-Za-z0-9]{22})$/)?.[1] ?? ''
+    const artists = text(raw.subtitle, 300)
+      .replace(/\u00a0/g, ' ')
+      .split(/,\s*/)
+      .map(name => text(name, 80))
+      .filter(Boolean)
+      .join(', ')
+    tracks.push({
+      title,
+      artist: artists || 'unknown artist',
+      album: '',
+      duration: Math.max(0, Math.round(Number(raw.duration ?? 0) / 1000)),
+      url: trackId ? `https://open.spotify.com/track/${trackId}` : undefined,
+    })
+  }
+  return tracks
+}
+
 export function mapYandexPlaylist(json: unknown): IntegrationTrack[] {
   const root = record(json)
   if (!root) return []

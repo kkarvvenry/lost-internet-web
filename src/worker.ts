@@ -1,4 +1,4 @@
-import { mapSpotifyPage, mapYandexPlaylist, parseSpotifyPlaylistUrl, parseYandexPlaylistUrl, type IntegrationTrack } from './lib/integrations'
+import { fetchSpotifyEmbedTracks, mapSpotifyPage, mapYandexPlaylist, parseSpotifyPlaylistUrl, parseYandexPlaylistUrl, type IntegrationTrack } from './lib/integrations'
 import { pkceChallenge, randomVerifier, spotifyAuthorizeUrl } from './lib/spotify'
 import {
   ACCOUNT_COOKIE,
@@ -522,45 +522,52 @@ export default {
             ).bind(account.id).first()
             : null
           let token: string | null = null
-          let via: 'account' | 'server' = 'server'
+          let via: 'account' | 'server' | null = null
           if (account && linked) {
             token = await linkedSpotifyToken(env, account.id).catch(() => null)
-            if (!token) {
-              return json({ error: 'spotify link expired, reconnect it in account.txt' }, 503)
-            }
-            via = 'account'
+            if (token) via = 'account'
           } else if (env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET) {
             try {
               token = await spotifyToken(env)
+              via = 'server'
             } catch {
-              return json({ error: 'spotify authentication failed' }, 502)
+              token = null
             }
-          } else {
-            return json({
-              error: account
-                ? 'connect your Spotify account in account.txt first'
-                : 'sign in and connect your Spotify account, or configure server credentials',
-            }, 503)
           }
           const limited = await enforceIntegrationLimit(request, env)
           if (limited) return limited
-          const tracks: IntegrationTrack[] = []
-          let next: string | null = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&fields=next,items(track(name,artists(name),album(name),duration_ms,external_urls(spotify)))`
-          for (let page = 0; next && page < 5; page += 1) {
-            const response = await fetch(next, { headers: { Authorization: `Bearer ${token}` } })
-            if (response.status === 401 && via === 'account') {
-              return json({ error: 'spotify link expired, reconnect it in account.txt' }, 503)
+
+          if (token) {
+            const tracks: IntegrationTrack[] = []
+            let next: string | null = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&fields=next,items(track(name,artists(name),album(name),duration_ms,external_urls(spotify)))`
+            let complete = true
+            for (let page = 0; next && page < 5; page += 1) {
+              const response = await fetch(next, { headers: { Authorization: `Bearer ${token}` } })
+              if (!response.ok) {
+                const detail = await response.text().catch(() => '')
+                console.error({ event: 'spotify_request_failed', status: response.status, detail: detail.slice(0, 300) })
+                complete = false
+                break
+              }
+              const mapped = mapSpotifyPage(await response.json())
+              tracks.push(...mapped.tracks)
+              next = mapped.next
             }
-            if (!response.ok) {
-              const detail = await response.text().catch(() => '')
-              console.error({ event: 'spotify_request_failed', status: response.status, detail: detail.slice(0, 300) })
-              return json({ error: 'spotify request failed', status: response.status, detail: detail.slice(0, 200) }, 502)
-            }
-            const mapped = mapSpotifyPage(await response.json())
-            tracks.push(...mapped.tracks)
-            next = mapped.next
+            if (complete) return json({ provider, tracks, count: tracks.length, via })
           }
-          return json({ provider, tracks, count: tracks.length, via })
+
+          try {
+            const tracks = await fetchSpotifyEmbedTracks(playlistId)
+            if (!tracks.length) throw new Error('embed returned no tracks')
+            return json({ provider, tracks, count: tracks.length, via: 'embed' })
+          } catch (error) {
+            console.error({ event: 'spotify_embed_failed', error: String(error) })
+            return json({
+              error: account && linked && !token
+                ? 'spotify link expired, reconnect it in account.txt'
+                : 'spotify playlist is unavailable',
+            }, 502)
+          }
         }
 
         if (!env.YANDEX_MUSIC_TOKEN) return json({ error: 'yandex token is not configured' }, 503)

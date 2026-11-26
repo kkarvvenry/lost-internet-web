@@ -418,7 +418,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [cloudBusy, setCloudBusy] = useState(false)
   const [spotifyLink, setSpotifyLink] = useState<SpotifyLinkStatus | null>(null)
   const [spotifyBusy, setSpotifyBusy] = useState(false)
-  const [importVia, setImportVia] = useState<'account' | 'server' | null>(null)
+  const [importVia, setImportVia] = useState<'account' | 'server' | 'embed' | null>(null)
   const [openMenu, setOpenMenu] = useState<MenuKind | null>(null)
   const [status, setStatus] = useState('Ready. Drop into the archive.')
   const [toast, setToast] = useState('')
@@ -1824,7 +1824,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         body: JSON.stringify({ provider: importProvider, url }),
       })
       const data = (await response.json().catch(() => ({}))) as {
-        tracks?: IntegrationTrack[]; error?: string; via?: 'account' | 'server'
+        tracks?: IntegrationTrack[]; error?: string; via?: 'account' | 'server' | 'embed'
       }
       if (!response.ok) {
         setImportError(data.error ?? `HTTP ${response.status}`)
@@ -2475,6 +2475,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
               )}
               {importVia === 'account' && <span className="li-import__via">{tr('PERSONAL SPOTIFY')}</span>}
               {importVia === 'server' && <span className="li-import__via">{tr('SERVER SPOTIFY')}</span>}
+              {importVia === 'embed' && <span className="li-import__via">{tr('PUBLIC SPOTIFY')}</span>}
             </div>
           )}
           {importError && <p className="li-import__error">{importError}</p>}

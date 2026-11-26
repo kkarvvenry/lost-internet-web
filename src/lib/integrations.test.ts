@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { mapSpotifyPage, mapYandexPlaylist, parseSpotifyPlaylistUrl, parseYandexPlaylistUrl } from './integrations'
+import { describe, expect, it, vi } from 'vitest'
+import { fetchSpotifyEmbedTracks, mapSpotifyPage, mapYandexPlaylist, parseSpotifyPlaylistUrl, parseYandexPlaylistUrl } from './integrations'
 
 describe('playlist URL parsing', () => {
   it('accepts Spotify playlist links and URIs', () => {
@@ -44,6 +44,32 @@ describe('playlist response mapping', () => {
       duration: 185,
       url: 'https://open.spotify.com/track/xyz',
     })
+  })
+
+  it('maps Spotify embed tracks when the Web API is blocked', async () => {
+    const nextData = JSON.stringify({
+      props: { pageProps: { state: { data: { entity: { trackList: [{
+        uri: 'spotify:track:4HCOHRCSQelz2GPX8iTamO',
+        title: 'Song',
+        subtitle: 'Artist,\u00a0Guest',
+        duration: 185000,
+      }, {}] } } } } },
+    })
+    vi.stubGlobal('fetch', async () => new Response(
+      `<html><script id="__NEXT_DATA__" type="application/json">${nextData}</script></html>`,
+      { status: 200 },
+    ))
+    try {
+      expect(await fetchSpotifyEmbedTracks('37i9dQZF1DXcBWIGoYBM5M')).toEqual([{
+        title: 'Song',
+        artist: 'Artist, Guest',
+        album: '',
+        duration: 185,
+        url: 'https://open.spotify.com/track/4HCOHRCSQelz2GPX8iTamO',
+      }])
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('maps Yandex tracks and ignores empty entries', () => {
