@@ -1,4 +1,4 @@
-const CACHE = 'lost-internet-v10'
+const CACHE = 'lost-internet-v11'
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg']
 
 self.addEventListener('install', (event) => {

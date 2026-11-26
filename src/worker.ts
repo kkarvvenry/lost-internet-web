@@ -539,7 +539,7 @@ export default {
 
           if (token) {
             const tracks: IntegrationTrack[] = []
-            let next: string | null = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&fields=next,items(track(name,artists(name),album(name),duration_ms,external_urls(spotify)))`
+            let next: string | null = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&fields=next,items(track(name,artists(name),album(name),duration_ms,preview_url,external_urls(spotify)))`
             let complete = true
             for (let page = 0; next && page < 5; page += 1) {
               const response = await fetch(next, { headers: { Authorization: `Bearer ${token}` } })

@@ -146,6 +146,13 @@ export const UI_RU: Record<string, string> = {
   'Create a playlist first.': 'Сначала создайте плейлист.',
   'No local matches found.': 'Совпадений в локальном архиве нет.',
   ' tracks added to playlist.': ' треков добавлено в плейлист.',
+  'IMPORT AUDIO': 'ИМПОРТ АУДИО',
+  'IMPORTING AUDIO...': 'ИМПОРТ АУДИО...',
+  'This playlist has no playable preview audio.': 'В этом плейлисте нет доступного аудио-превью.',
+  'No Spotify preview audio could be downloaded.': 'Не удалось скачать аудио-превью Spotify.',
+  Imported: 'Импортировано',
+  ' playable preview(s) into this browser.': ' воспроизводимых превью в этот браузер.',
+  ' preview(s) failed.': ' превью не скачано.',
 
   // public index
   '// PUBLIC INDEX': '// ПУБЛИЧНЫЙ ИНДЕКС',

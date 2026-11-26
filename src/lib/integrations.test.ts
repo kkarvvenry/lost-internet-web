@@ -33,6 +33,7 @@ describe('playlist response mapping', () => {
         artists: [{ name: 'Artist' }, { name: 'Guest' }],
         album: { name: 'Album' },
         duration_ms: 185000,
+        preview_url: 'https://p.scdn.co/mp3-preview/xyz',
         external_urls: { spotify: 'https://open.spotify.com/track/xyz' },
       } }],
     })
@@ -43,6 +44,7 @@ describe('playlist response mapping', () => {
       album: 'Album',
       duration: 185,
       url: 'https://open.spotify.com/track/xyz',
+      previewUrl: 'https://p.scdn.co/mp3-preview/xyz',
     })
   })
 
@@ -53,6 +55,7 @@ describe('playlist response mapping', () => {
         title: 'Song',
         subtitle: 'Artist,\u00a0Guest',
         duration: 185000,
+        audioPreview: { url: 'https://p.scdn.co/mp3-preview/abc' },
       }, {}] } } } } },
     })
     vi.stubGlobal('fetch', async () => new Response(
@@ -66,6 +69,7 @@ describe('playlist response mapping', () => {
         album: '',
         duration: 185,
         url: 'https://open.spotify.com/track/4HCOHRCSQelz2GPX8iTamO',
+        previewUrl: 'https://p.scdn.co/mp3-preview/abc',
       }])
     } finally {
       vi.unstubAllGlobals()

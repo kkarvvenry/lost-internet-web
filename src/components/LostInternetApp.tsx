@@ -3,7 +3,7 @@ import { uid, fmt, fmtBytes, clamp, dbToGain, parseName } from '../lib/format'
 import { VIRTUALIZE_THRESHOLD, tableWindow } from '../lib/table'
 import { translate, type Language } from '../lib/i18n'
 import { PROVIDERS, buildSearchQuery, buildSearchUrl, isProviderId, normalizeServiceUrl, sanitizeLinks, type ProviderId, type TrackLinks } from '../lib/links'
-import { matchScore } from '../lib/match'
+import { matchScore, normalizeMatch } from '../lib/match'
 import type { IntegrationProvider, IntegrationTrack } from '../lib/integrations'
 import { sanitizeAccountData, sanitizeSettings, type Account, type AccountTrackRef } from '../lib/account'
 
@@ -1859,6 +1859,86 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     setPlaylists(prev => prev.map(p => p.id === playlist.id ? { ...p, trackIds: [...p.trackIds, ...ids] } : p))
     notify(`${ids.length}${tr(' tracks added to playlist.')}`)
   }
+  async function addImportedAudio() {
+    if (!importResults.length || importBusy) return
+    const queue = importResults.filter(item =>
+      item.previewUrl && /^https:\/\/p\.scdn\.co\/mp3-preview\/[A-Za-z0-9]+$/.test(item.previewUrl))
+    if (!queue.length) {
+      notify(tr('This playlist has no playable preview audio.'))
+      return
+    }
+    setImportBusy(true)
+    try {
+      const known = new Set(tracksRef.current.map(t => `${normalizeMatch(t.name)}:${normalizeMatch(t.artist)}`))
+      const added: Track[] = []
+      const saves: Promise<void>[] = []
+      const failed: string[] = []
+      const runners = Array.from({ length: Math.min(6, queue.length) }, async () => {
+        while (queue.length) {
+          const item = queue.shift()
+          if (!item) return
+          const key = `${normalizeMatch(item.title)}:${normalizeMatch(item.artist)}`
+          if (known.has(key)) continue
+          known.add(key)
+          try {
+            const response = await fetch(item.previewUrl as string, { mode: 'cors' })
+            if (!response.ok) throw new Error(String(response.status))
+            const blob = await response.blob()
+            if (!blob.size) throw new Error('empty preview')
+            const id = uid()
+            const track: Track = {
+              id,
+              blob,
+              url: makeUrl(blob, id),
+              name: item.title,
+              artist: item.artist || 'unknown artist',
+              album: item.album || 'Spotify preview',
+              genre: '',
+              duration: item.duration || 30,
+              size: blob.size,
+              format: 'MP3',
+              bitrate: 96,
+              sampleRate: 0,
+              favorite: false,
+              plays: 0,
+              lastPlayed: 0,
+              addedAt: Date.now() + added.length,
+              links: item.url ? { spotify: normalizeServiceUrl('spotify', item.url) ?? item.url } : undefined,
+            }
+            added.push(track)
+            tracksRef.current = [track, ...tracksRef.current]
+            saves.push(persistTrack(track).catch(() => { failed.push(item.title) }))
+          } catch {
+            failed.push(item.title)
+          }
+        }
+      })
+      await Promise.all(runners)
+      await Promise.all(saves)
+      if (!added.length) {
+        notify(tr('No Spotify preview audio could be downloaded.'))
+        return
+      }
+      setTracks(prev => [...added, ...prev])
+      let target = playlists.find(p => p.id === selectedPlaylistId) ?? playlists[0]
+      if (!target) {
+        target = { id: uid(), name: 'SPOTIFY IMPORT', trackIds: [] }
+        setPlaylists(prev => [...prev, target as Playlist])
+        setSelectedPlaylistId(target.id)
+      }
+      const ids = added.map(t => t.id)
+      const targetId = target.id
+      setPlaylists(prev => prev.map(p => p.id === targetId
+        ? { ...p, trackIds: [...p.trackIds, ...ids.filter(id => !p.trackIds.includes(id))] }
+        : p))
+      playUiTokenRef.current += 1
+      setSection('library')
+      const suffix = failed.length ? ` ${failed.length}${tr(' preview(s) failed.')}` : ''
+      notify(`${tr('Imported')} ${added.length}${tr(' playable preview(s) into this browser.')}${suffix}`)
+    } finally {
+      setImportBusy(false)
+    }
+  }
   function playCatalogTrack(item: CatalogTrack) {
     const title = item.title.trim().toLowerCase()
     const artist = item.artist.trim().toLowerCase()
@@ -2456,6 +2536,11 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
             />
             <button className="li-btn" disabled={importBusy || !importUrl.trim()} onClick={() => { void importPlaylist() }}>{importBusy ? tr('IMPORTING...') : tr('IMPORT')}</button>
             <button className="li-btn" disabled={!importResults.length} onClick={addImportedMatches}>{tr('ADD MATCHED')}</button>
+            {importProvider === 'spotify' && (
+              <button className="li-btn" disabled={importBusy || !importResults.length} onClick={() => { void addImportedAudio() }}>
+                {importBusy ? tr('IMPORTING AUDIO...') : tr('IMPORT AUDIO')}
+              </button>
+            )}
           </div>
           {importProvider === 'spotify' && (
             <div className="li-import__spotify">

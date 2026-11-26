@@ -83,7 +83,7 @@ Workflow `.github/workflows/ci.yml` на каждый push в `main` снача�
 npx --yes wrangler@4.168.0 d1 execute lost-internet-catalog --remote --file=migrations/0005_integration_hits.sql
 ```
 
-Endpoint `POST /api/integrations/playlist` принимает `{ "provider": "spotify" | "yandex", "url": "..." }` и возвращает только список треков (название, артист, альбом, длительность, ссылка) и поле `via` (`account` — личный Spotify пользователя, `server` — общий серверный токен, `embed` — публичная страница плейлиста, если Web API недоступен). Аудио не скачивается. Лимит — 20 запросов с IP в сутки.
+Endpoint `POST /api/integrations/playlist` принимает `{ "provider": "spotify" | "yandex", "url": "..." }` и возвращает список треков (название, артист, альбом, длительность, ссылка и, для Spotify, `previewUrl`) и поле `via` (`account` — личный Spotify пользователя, `server` — общий серверный токен, `embed` — публичная страница плейлиста, если Web API недоступен). Worker не скачивает аудио; кнопка `IMPORT AUDIO` в браузере забирает публичные 30-секундные превью `p.scdn.co` напрямую в IndexedDB пользователя и добавляет их в плейлист. Полноценные аудиофайлы Spotify через публичный Web API недоступны. Лимит — 20 запросов с IP в сутки.
 
 Если нет ни привязки, ни серверных секретов, endpoint всё равно импортирует **публичный** плейлист Spotify через `embed`. Приватные плейлисты требуют личной привязки и работающего Web API. Для Яндекса без `YANDEX_MUSIC_TOKEN` endpoint по-прежнему отвечает `503`; остальной сайт работает нормально. Значения ключей вводятся только в GitHub Secrets или в терминал — не в чат и не в файлы репозитория.
 
