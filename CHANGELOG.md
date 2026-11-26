@@ -2,7 +2,7 @@
 
 ## 2026-11-26
 
-### `2d24461` — Spotify import works through the public playlist page
+### `18e988a` — Spotify import works through the public playlist page
 - Worker теперь пробует Web API с личным/серверным токеном, а при `403`/другом отказе читает метаданные публичного плейлиста со страницы `open.spotify.com/embed/playlist/...`.
 - Импорт публичных плейлистов Spotify больше не требует входа, привязки или `SPOTIFY_CLIENT_SECRET`; в интерфейсе добавлена метка `PUBLIC SPOTIFY` и RU-перевод.
 - Маппер embed-данных вынесен в `src/lib/integrations.ts` и покрыт тестом; дневной лимит импорта по-прежнему один на запрос.
