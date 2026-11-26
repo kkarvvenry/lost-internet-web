@@ -1,5 +1,15 @@
 # LOST INTERNET — changelog
 
+## 2026-11-26
+
+### `2303e3f` — Import playlists from Spotify and Yandex Music
+- В разделе NETWORK появилась панель `// IMPORT PLAYLIST`: можно вставить ссылку на плейлист Spotify или Яндекс.Музыки и получить список треков с названиями, артистами, альбомами и длительностью.
+- Новый endpoint Worker `POST /api/integrations/playlist` забирает метаданные через Spotify Client Credentials или OAuth Яндекс.Музыки; токены хранятся только в Worker secrets, аудио не скачивается и не загружается на сервер.
+- Локальные файлы сопоставляются с импортированными треками по названию и артисту; кнопка `ADD MATCHED` добавляет найденные совпадения в плейлист. Сравнение вынесено в `src/lib/match.ts`.
+- Добавлена миграция `0005_integration_hits.sql`: лимит 20 импортов с IP в сутки.
+- GitHub Actions теперь опционально синхронизирует repository secrets `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и `YANDEX_MUSIC_TOKEN` в Worker; без них endpoint возвращает понятную ошибку `503`, а остальной сайт работает как раньше.
+- Парсеры и мапперы вынесены в `src/lib/integrations.ts` и покрыты тестами; добавлены RU-строки, стили и адаптивная вёрстка панели.
+
 ## 2026-11-25
 
 ### `bbf6199` — Service links: Yandex Music, Spotify and more
