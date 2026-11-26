@@ -117,6 +117,21 @@ export const UI_RU: Record<string, string> = {
   'Your audio files stay in this browser. Settings, playlists and links can be stored in your account.': 'Аудиофайлы остаются в этом браузере. Настройки, плейлисты и ссылки можно сохранить в аккаунте.',
   'Each account has its own local archive on this device. No passwords are sent to the chat or stored in the browser.': 'У каждого аккаунта свой локальный архив на этом устройстве. Пароли не сохраняются в браузере и никуда не отправляются, кроме сервера аккаунтов.',
 
+  // personal Spotify link
+  'LINK SPOTIFY': 'ПРИВЯЗАТЬ SPOTIFY',
+  DISCONNECT: 'ОТКЛЮЧИТЬ',
+  'SPOTIFY LINKED': 'SPOTIFY ПРИВЯЗАН',
+  'SPOTIFY NOT LINKED': 'SPOTIFY НЕ ПРИВЯЗАН',
+  'LINKED AS': 'ПОДКЛЮЧЁН КАК',
+  'SIGN IN TO LINK SPOTIFY': 'ВОЙДИТЕ, ЧТОБЫ ПРИВЯЗАТЬ SPOTIFY',
+  'PERSONAL SPOTIFY': 'ЛИЧНЫЙ SPOTIFY',
+  'SERVER SPOTIFY': 'СЕРВЕРНЫЙ SPOTIFY',
+  'Spotify connected.': 'Spotify подключён.',
+  'Spotify connection failed.': 'Не удалось подключить Spotify.',
+  'Spotify disconnected.': 'Spotify отключён.',
+  'Could not disconnect Spotify.': 'Не удалось отключить Spotify.',
+  'Spotify service is unreachable.': 'Сервис Spotify недоступен.',
+
   // playlist import
   '// IMPORT PLAYLIST': '// ИМПОРТ ПЛЕЙЛИСТА',
   'Playlist URL': 'Ссылка на плейлист',

@@ -1017,6 +1017,41 @@ html[data-theme='light'] ::selection {
   font-size: 11px;
 }
 
+.li-import__spotify {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--li-silver);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.li-import__spotify .is-linked {
+  color: var(--li-white);
+}
+
+.li-import__via {
+  border: 1px solid var(--li-border);
+  padding: 1px 4px;
+}
+
+.li-linkbtn {
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--li-blue);
+  color: var(--li-white);
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.li-linkbtn:disabled {
+  color: var(--li-silver);
+  cursor: wait;
+}
+
 .li-import__list {
   margin-top: 7px;
   border: 1px solid var(--li-border);
@@ -1561,6 +1596,28 @@ html[data-theme='light'] ::selection {
 
 .li-account__field .li-input {
   width: 100%;
+}
+
+.li-account__spotify {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  align-items: center;
+  border: 1px dashed var(--li-border);
+  padding: 6px;
+}
+
+.li-account__spotify strong {
+  color: var(--li-silver);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.li-account__spotify span {
+  grid-column: 1 / -1;
+  color: var(--li-white);
+  font-size: 11px;
+  word-break: break-all;
 }
 
 .li-account__actions {

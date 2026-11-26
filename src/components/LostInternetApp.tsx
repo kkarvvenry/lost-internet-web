@@ -6,6 +6,14 @@ import { PROVIDERS, buildSearchQuery, buildSearchUrl, isProviderId, normalizeSer
 import { matchScore } from '../lib/match'
 import type { IntegrationProvider, IntegrationTrack } from '../lib/integrations'
 import { sanitizeAccountData, sanitizeSettings, type Account, type AccountTrackRef } from '../lib/account'
+
+type SpotifyLinkStatus = {
+  linked: boolean
+  spotifyUserId: string
+  displayName: string
+  scope: string
+  connectedAt: number
+}
 import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
@@ -143,7 +151,7 @@ const MENUS: Array<{ id: MenuKind; label: string }> = [
 ]
 const EMPTY_LINKS: TrackLinks = {}
 const POPUP_WIDTH: Record<PopupKind, number> = { ie: 340, favorites: 260, about: 320, help: 420, links: 440, account: 400 }
-const POPUP_HEIGHT: Record<PopupKind, number> = { ie: 150, favorites: 180, about: 200, help: 440, links: 480, account: 420 }
+const POPUP_HEIGHT: Record<PopupKind, number> = { ie: 150, favorites: 180, about: 200, help: 440, links: 480, account: 470 }
 const POPUP_TITLE: Record<PopupKind, string> = {
   ie: 'Internet Explorer',
   favorites: '★ Favorites',
@@ -408,6 +416,9 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
   const [cloudBusy, setCloudBusy] = useState(false)
+  const [spotifyLink, setSpotifyLink] = useState<SpotifyLinkStatus | null>(null)
+  const [spotifyBusy, setSpotifyBusy] = useState(false)
+  const [importVia, setImportVia] = useState<'account' | 'server' | null>(null)
   const [openMenu, setOpenMenu] = useState<MenuKind | null>(null)
   const [status, setStatus] = useState('Ready. Drop into the archive.')
   const [toast, setToast] = useState('')
@@ -665,6 +676,13 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     if (hydratedRef.current) return
     hydratedRef.current = true
     ;(async () => {
+      const params = new URLSearchParams(window.location.search)
+      const spotifyResult = params.get('spotify')
+      if (spotifyResult) {
+        params.delete('spotify')
+        const query = params.toString()
+        window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`)
+      }
       let signedIn: Account | null = null
       try {
         const response = await fetch('/api/auth/me')
@@ -676,7 +694,12 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
         }
       } catch { /* guest mode */ }
       await loadArchive()
-      if (signedIn) await loadCloudData()
+      if (signedIn) {
+        await loadCloudData()
+        await loadSpotifyLink()
+      }
+      if (spotifyResult === 'connected') notify(tr('Spotify connected.'))
+      if (spotifyResult === 'error') notify(tr('Spotify connection failed.'))
     })()
   }, [])
 
@@ -1595,6 +1618,68 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       setCloudBusy(false)
     }
   }
+  async function loadSpotifyLink() {
+    try {
+      const response = await fetch('/api/spotify/link')
+      if (response.status === 401) {
+        setSpotifyLink(null)
+        return
+      }
+      if (!response.ok) return
+      const data = (await response.json().catch(() => ({}))) as Partial<SpotifyLinkStatus>
+      setSpotifyLink({
+        linked: Boolean(data.linked),
+        spotifyUserId: String(data.spotifyUserId ?? ''),
+        displayName: String(data.displayName ?? ''),
+        scope: String(data.scope ?? ''),
+        connectedAt: Number(data.connectedAt ?? 0),
+      })
+    } catch {
+      setSpotifyLink(null)
+    }
+  }
+  async function connectSpotify() {
+    if (!account || spotifyBusy) return
+    setSpotifyBusy(true)
+    setAuthError('')
+    try {
+      const response = await fetch('/api/spotify/auth')
+      const data = (await response.json().catch(() => ({}))) as { url?: string; error?: string }
+      if (!response.ok || !data.url) {
+        const message = data.error ?? `HTTP ${response.status}`
+        setAuthError(message)
+        notify(message)
+        return
+      }
+      window.location.assign(data.url)
+    } catch {
+      const message = tr('Spotify service is unreachable.')
+      setAuthError(message)
+      notify(message)
+    } finally {
+      setSpotifyBusy(false)
+    }
+  }
+  async function disconnectSpotify() {
+    if (spotifyBusy) return
+    setSpotifyBusy(true)
+    try {
+      const response = await fetch('/api/spotify/disconnect', { method: 'POST' })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      setSpotifyLink({
+        linked: false,
+        spotifyUserId: '',
+        displayName: '',
+        scope: '',
+        connectedAt: 0,
+      })
+      notify(tr('Spotify disconnected.'))
+    } catch {
+      notify(tr('Could not disconnect Spotify.'))
+    } finally {
+      setSpotifyBusy(false)
+    }
+  }
   function applyCloudData(payload: ReturnType<typeof sanitizeAccountData>) {
     if (Object.keys(payload.settings).length) setSettings(prev => normalizeSettings({ ...prev, ...payload.settings }))
     if (payload.playlists.length) {
@@ -1694,6 +1779,7 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       setPopups(prev => prev.filter(p => p.kind !== 'account'))
       await loadArchive()
       await loadCloudData()
+      await loadSpotifyLink()
       notify(mode === 'register' ? tr('Account created.') : tr('Welcome back.'))
     } catch {
       setAuthError(tr('Account service is unreachable.'))
@@ -1715,6 +1801,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     setProgress(0)
     setDuration(0)
     setAccount(null)
+    setSpotifyLink(null)
+    setImportVia(null)
     setDatabaseName(DB_NAME)
     setAuthError('')
     setPopups(prev => prev.filter(p => p.kind !== 'account'))
@@ -1728,19 +1816,24 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
     setImportBusy(true)
     setImportError('')
     setImportResults([])
+    setImportVia(null)
     try {
       const response = await fetch('/api/integrations/playlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: importProvider, url }),
       })
-      const data = (await response.json().catch(() => ({}))) as { tracks?: IntegrationTrack[]; error?: string }
+      const data = (await response.json().catch(() => ({}))) as {
+        tracks?: IntegrationTrack[]; error?: string; via?: 'account' | 'server'
+      }
       if (!response.ok) {
         setImportError(data.error ?? `HTTP ${response.status}`)
+        if (importProvider === 'spotify' && account) await loadSpotifyLink()
         return
       }
       const list = Array.isArray(data.tracks) ? data.tracks : []
       setImportResults(list)
+      setImportVia(data.via ?? null)
       if (!list.length) setImportError(tr('No tracks found in this playlist.'))
     } catch {
       setImportError(tr('Import service is unreachable.'))
@@ -2364,6 +2457,26 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
             <button className="li-btn" disabled={importBusy || !importUrl.trim()} onClick={() => { void importPlaylist() }}>{importBusy ? tr('IMPORTING...') : tr('IMPORT')}</button>
             <button className="li-btn" disabled={!importResults.length} onClick={addImportedMatches}>{tr('ADD MATCHED')}</button>
           </div>
+          {importProvider === 'spotify' && (
+            <div className="li-import__spotify">
+              <span className={spotifyLink?.linked ? 'is-linked' : ''}>
+                {!account
+                  ? tr('SIGN IN TO LINK SPOTIFY')
+                  : spotifyLink?.linked
+                    ? `${tr('SPOTIFY LINKED')}: ${spotifyLink.displayName || spotifyLink.spotifyUserId || tr('ACCOUNT')}`
+                    : tr('SPOTIFY NOT LINKED')}
+              </span>
+              {!account ? (
+                <button className="li-linkbtn" onClick={() => openPopup('account')}>{tr('LOGIN')}</button>
+              ) : spotifyLink?.linked ? (
+                <button className="li-linkbtn" disabled={spotifyBusy} onClick={() => { void disconnectSpotify() }}>{tr('DISCONNECT')}</button>
+              ) : (
+                <button className="li-linkbtn" disabled={spotifyBusy} onClick={() => { void connectSpotify() }}>{tr('LINK SPOTIFY')}</button>
+              )}
+              {importVia === 'account' && <span className="li-import__via">{tr('PERSONAL SPOTIFY')}</span>}
+              {importVia === 'server' && <span className="li-import__via">{tr('SERVER SPOTIFY')}</span>}
+            </div>
+          )}
           {importError && <p className="li-import__error">{importError}</p>}
           {Boolean(importResults.length) && (
             <div className="li-import__list">
@@ -2691,6 +2804,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 password={authPassword}
                 name={authName}
                 busy={authBusy || cloudBusy}
+                spotifyLink={spotifyLink}
+                spotifyBusy={spotifyBusy}
                 error={authError}
                 tr={tr}
                 onMode={setAuthMode}
@@ -2700,6 +2815,8 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
                 onSubmit={submitAuth}
                 onSave={saveCloudData}
                 onLoad={loadCloudData}
+                onConnectSpotify={connectSpotify}
+                onDisconnectSpotify={disconnectSpotify}
                 onLogout={logoutAccount}
               />
             )}
@@ -2836,13 +2953,15 @@ function LinksPopupBody({ query, links, editable, defaultProvider, tr, onSave }:
   )
 }
 
-function AccountPopupBody({ account, mode, email, password, name, busy, error, tr, onMode, onEmail, onPassword, onName, onSubmit, onSave, onLoad, onLogout }: {
+function AccountPopupBody({ account, mode, email, password, name, busy, spotifyLink, spotifyBusy, error, tr, onMode, onEmail, onPassword, onName, onSubmit, onSave, onLoad, onConnectSpotify, onDisconnectSpotify, onLogout }: {
   account: Account | null
   mode: 'login' | 'register'
   email: string
   password: string
   name: string
   busy: boolean
+  spotifyLink: SpotifyLinkStatus | null
+  spotifyBusy: boolean
   error: string
   tr: (text: string) => string
   onMode: (mode: 'login' | 'register') => void
@@ -2852,6 +2971,8 @@ function AccountPopupBody({ account, mode, email, password, name, busy, error, t
   onSubmit: (mode: 'login' | 'register', email: string, password: string, name: string) => void
   onSave: () => void
   onLoad: () => void
+  onConnectSpotify: () => void
+  onDisconnectSpotify: () => void
   onLogout: () => void
 }) {
   if (account) {
@@ -2862,6 +2983,17 @@ function AccountPopupBody({ account, mode, email, password, name, busy, error, t
           <span>{account.email}</span>
         </div>
         <p>{tr('Your audio files stay in this browser. Settings, playlists and links can be stored in your account.')}</p>
+        <div className="li-account__spotify">
+          <strong>SPOTIFY</strong>
+          <span>{spotifyLink?.linked
+            ? `${tr('LINKED AS')}: ${spotifyLink.displayName || spotifyLink.spotifyUserId || tr('ACCOUNT')}`
+            : tr('SPOTIFY NOT LINKED')}</span>
+          <button
+            className="li-btn"
+            disabled={spotifyBusy}
+            onClick={() => { if (spotifyLink?.linked) onDisconnectSpotify(); else onConnectSpotify() }}
+          >{spotifyBusy ? tr('WORKING...') : tr(spotifyLink?.linked ? 'DISCONNECT' : 'LINK SPOTIFY')}</button>
+        </div>
         <div className="li-account__actions">
           <button className="li-btn" disabled={busy} onClick={onSave}>{busy ? tr('WORKING...') : tr('SAVE TO ACCOUNT')}</button>
           <button className="li-btn" disabled={busy} onClick={onLoad}>{tr('LOAD FROM ACCOUNT')}</button>

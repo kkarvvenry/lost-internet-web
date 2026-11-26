@@ -27,11 +27,13 @@ https://lost-internet-web.stepanb249.workers.dev
 - `migrations/0004_publish_hits.sql` добавляет таблицу дневного лимита публикаций (10 с IP);
 - `migrations/0005_integration_hits.sql` добавляет таблицу дневного лимита импорта плейлистов (20 с IP);
 - `migrations/0006_accounts.sql` добавляет таблицы аккаунтов, сессий, облачных данных и лимита попыток входа;
-- API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`, `POST /api/integrations/playlist`, `GET /api/auth/me`, `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET|PUT /api/user/data`;
+- `migrations/0007_spotify_links.sql` добавляет состояния OAuth PKCE и личные Spotify-токены по аккаунтам;
+- API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`, `POST /api/integrations/playlist`, `GET /api/auth/me`, `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET|PUT /api/user/data`, `GET /api/spotify/auth`, `GET /api/spotify/callback`, `GET /api/spotify/link`, `POST /api/spotify/disconnect`;
 - интерфейс переводится между RU и EN переключателем в titlebar или в `SETTINGS // LANGUAGE`, выбор сохраняется в IndexedDB;
 - привязки к Yandex Music, Spotify, YouTube Music, Bandcamp, SoundCloud и MusicBrainz работают полностью на стороне браузера: ничего дополнительно деплоить и никакие ключи не нужны;
-- импорт плейлистов Spotify/Яндекс.Музыки работает через Worker и требует секретов (см. ниже); в каталог и в IndexedDB попадают только метаданные треков;
+- импорт плейлистов Spotify/Яндекс.Музыки работает через Worker; личная привязка Spotify требует только `SPOTIFY_CLIENT_ID`, общий серверный импорт — `SPOTIFY_CLIENT_ID` + `SPOTIFY_CLIENT_SECRET`, а Яндекс — `YANDEX_MUSIC_TOKEN` (см. ниже); в каталог и в IndexedDB попадают только метаданные треков;
 - аккаунты работают без дополнительных секретов: пароли хэшируются PBKDF2, сессии хранятся в D1 и передаются через HttpOnly-cookie;
+- каждый вошедший пользователь может привязать свой Spotify через OAuth PKCE; токены хранятся в D1 отдельно для каждого аккаунта и используются только для его импорта плейлистов;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`;
 - сайт уже задеплоен и отвечает `200`.
@@ -81,19 +83,48 @@ Workflow `.github/workflows/ci.yml` на каждый push в `main` снача�
 npx --yes wrangler@4.168.0 d1 execute lost-internet-catalog --remote --file=migrations/0005_integration_hits.sql
 ```
 
-Endpoint `POST /api/integrations/playlist` принимает `{ "provider": "spotify" | "yandex", "url": "..." }` и возвращает только список треков (название, артист, альбом, длительность, ссылка). Аудио не скачивается. Лимит — 20 запросов с IP в сутки.
+Endpoint `POST /api/integrations/playlist` принимает `{ "provider": "spotify" | "yandex", "url": "..." }` и возвращает только список треков (название, артист, альбом, длительность, ссылка) и поле `via` (`account` — личный Spotify пользователя, `server` — общий серверный токен). Аудио не скачивается. Лимит — 20 запросов с IP в сутки.
 
 Без секретов endpoint отвечает `503` с понятным сообщением; остальной сайт работает нормально. Значения ключей вводятся только в GitHub Secrets или в терминал — не в чат и не в файлы репозитория.
 
+### Личный Spotify для каждого аккаунта
+
+Привязка использует OAuth Authorization Code + PKCE и требует только `SPOTIFY_CLIENT_ID`. Секрет клиента от пользователя не нужен.
+
+1. Миграция `0007_spotify_links.sql` уже применена к рабочей базе. Для нового проекта:
+
+```powershell
+npx --yes wrangler@4.168.0 d1 execute lost-internet-catalog --remote --file=migrations/0007_spotify_links.sql
+```
+
+2. В Spotify Developer Dashboard открой своё приложение → **Edit Settings** → **Redirect URIs** и добавь точный адрес:
+
+```text
+https://lost-internet-web.stepanb249.workers.dev/api/spotify/callback
+```
+
+3. Добавь repository secret `SPOTIFY_CLIENT_ID` в **Settings → Secrets and variables → Actions**. Workflow при деплое запишет его в Worker через `wrangler secret put`. Для ручной записи:
+
+```powershell
+npx --yes wrangler@4.168.0 secret put SPOTIFY_CLIENT_ID
+```
+
+Команда запросит значение с клавиатуры. После изменения секретов повторный deploy не требуется — новые значения подхватываются сразу.
+
+4. Вошедший пользователь открывает `LOGIN` → `account.txt` → `LINK SPOTIFY`, подтверждает доступ на странице Spotify и возвращается на сайт с флагом `?spotify=connected`. В панели импорта NETWORK появится имя подключённого Spotify; при импорте отображается метка `PERSONAL SPOTIFY`. Кнопка `DISCONNECT` удаляет токен только этого аккаунта.
+
+Если `SPOTIFY_CLIENT_ID` не задан, `GET /api/spotify/auth` возвращает `503 spotify client id is not configured`. Если у пользователя нет привязки, а заданы оба серверных секрета, импорт переключается на общий Client Credentials token и помечается как `SERVER SPOTIFY`. Если привязка есть, но её токен отозван, импорт просит повторно подключить Spotify и не использует серверный токен молча.
+
+### Общий серверный Spotify и Яндекс.Музыка
+
 Добавь нужные repository secrets в **Settings → Secrets and variables → Actions**:
 
-- `SPOTIFY_CLIENT_ID` и `SPOTIFY_CLIENT_SECRET` — приложение в Spotify Developer Dashboard; обе переменные нужны вместе, иначе импорт Spotify останется недоступен;
+- `SPOTIFY_CLIENT_SECRET` — секрет приложения Spotify; нужен только вместе с `SPOTIFY_CLIENT_ID` для серверного импорта без привязки пользователя;
 - `YANDEX_MUSIC_TOKEN` — OAuth-токен Яндекс.Музыки для импорта плейлистов.
 
 Workflow при деплое сам вызовет `wrangler secret put` для каждого заданного секрета. Если секрет не задан, шаг просто пропускается. Для ручной записи в Worker:
 
 ```powershell
-npx --yes wrangler@4.168.0 secret put SPOTIFY_CLIENT_ID
 npx --yes wrangler@4.168.0 secret put SPOTIFY_CLIENT_SECRET
 npx --yes wrangler@4.168.0 secret put YANDEX_MUSIC_TOKEN
 ```
@@ -117,6 +148,8 @@ npx --yes wrangler@4.168.0 d1 execute lost-internet-catalog --remote --file=migr
 Локальный архив аудио разделён по аккаунтам: для гостя используется база `lost-internet-web`, для вошедшего — `lost-internet-web-<id аккаунта>`. Аудио остаётся в IndexedDB браузера. Кнопки `SAVE TO ACCOUNT` и `LOAD FROM ACCOUNT` в окне `account.txt` синхронизируют только метаданные: настройки, плейлисты, избранное и ссылки. При входе на другом устройстве файлы нужно добавить заново — совпадения ищутся по названию и артисту.
 
 Локальный Express-прокси передаёт заголовки `Cookie`/`Set-Cookie` и снимает флаг `Secure` с cookie, если открыт обычный `http://localhost`, поэтому вход работает и при `npm run dev`.
+
+Привязка Spotify (`/api/spotify/auth`, `/api/spotify/callback`, `/api/spotify/link`, `/api/spotify/disconnect`) доступна только вошедшим пользователям и хранит токены в таблице `spotify_links`, а не в браузере. Подробности настройки — в разделе про личный Spotify выше.
 
 Проверить токен локально можно так:
 

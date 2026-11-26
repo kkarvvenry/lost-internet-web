@@ -53,3 +53,24 @@ describe('catalog publish rate limit', () => {
     expect(response.status).toBe(200)
   })
 })
+
+describe('personal Spotify linking', () => {
+  it('requires an account for every Spotify endpoint', async () => {
+    const { env } = fakeEnv()
+    for (const path of ['/api/spotify/auth', '/api/spotify/link']) {
+      const response = await worker.fetch(new Request(`https://example.test${path}`), env)
+      expect(response.status).toBe(401)
+    }
+    const disconnect = await worker.fetch(new Request('https://example.test/api/spotify/disconnect', {
+      method: 'POST',
+    }), env)
+    expect(disconnect.status).toBe(401)
+  })
+
+  it('redirects failed Spotify callbacks to the app with an error flag', async () => {
+    const { env } = fakeEnv()
+    const response = await worker.fetch(new Request('https://example.test/api/spotify/callback?error=access_denied'), env)
+    expect(response.status).toBe(302)
+    expect(response.headers.get('location')).toContain('spotify=error')
+  })
+})

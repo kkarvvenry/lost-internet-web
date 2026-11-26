@@ -1,4 +1,5 @@
 import { mapSpotifyPage, mapYandexPlaylist, parseSpotifyPlaylistUrl, parseYandexPlaylistUrl, type IntegrationTrack } from './lib/integrations'
+import { pkceChallenge, randomVerifier, spotifyAuthorizeUrl } from './lib/spotify'
 import {
   ACCOUNT_COOKIE,
   ACCOUNT_DATA_LIMIT,
@@ -124,13 +125,20 @@ async function enforceIntegrationLimit(request: Request, env: Env): Promise<Resp
   return null
 }
 
+function spotifyTokenHeaders(env: Env): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' }
+  if (env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET) {
+    headers.Authorization = `Basic ${btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`)}`
+  }
+  return headers
+}
+
 async function spotifyToken(env: Env): Promise<string> {
   if (spotifyTokenCache && spotifyTokenCache.expiresAt > Date.now() + 30_000) return spotifyTokenCache.value
-  const credentials = btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`)
   const response = await fetch('https://accounts.spotify.com/api/token', {
     method: 'POST',
     headers: {
-      Authorization: `Basic ${credentials}`,
+      Authorization: `Basic ${btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`)}`,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: 'grant_type=client_credentials',
@@ -142,6 +150,50 @@ async function spotifyToken(env: Env): Promise<string> {
     value: data.access_token,
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
   }
+  return data.access_token
+}
+
+type SpotifyLinkRow = {
+  spotify_user_id: string
+  display_name: string
+  access_token: string
+  refresh_token: string
+  expires_at: number
+  scope: string
+  connected_at: number
+}
+
+async function linkedSpotifyToken(env: Env, accountId: string): Promise<string | null> {
+  const row = await env.lost_internet_catalog.prepare(
+    'SELECT spotify_user_id, display_name, access_token, refresh_token, expires_at, scope, connected_at '
+    + 'FROM spotify_links WHERE account_id = ?'
+  ).bind(accountId).first() as SpotifyLinkRow | null
+  if (!row) return null
+  if (row.expires_at > Date.now() + 60_000) return row.access_token
+  if (!env.SPOTIFY_CLIENT_ID) return null
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: row.refresh_token,
+    client_id: env.SPOTIFY_CLIENT_ID,
+  })
+  const response = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: spotifyTokenHeaders(env),
+    body,
+  })
+  if (!response.ok) return null
+  const data = await response.json() as {
+    access_token?: string; refresh_token?: string; expires_in?: number
+  }
+  if (!data.access_token) return null
+  await env.lost_internet_catalog.prepare(
+    'UPDATE spotify_links SET access_token = ?, refresh_token = ?, expires_at = ? WHERE account_id = ?'
+  ).bind(
+    data.access_token,
+    data.refresh_token || row.refresh_token,
+    Date.now() + (data.expires_in ?? 3600) * 1000,
+    accountId,
+  ).run()
   return data.access_token
 }
 
@@ -262,6 +314,110 @@ export default {
           return json({ ok: true, payload })
         }
       }
+
+      if (url.pathname.startsWith('/api/spotify/')) {
+        const spotifyFail = () => Response.redirect(new URL('/?spotify=error', request.url).toString(), 302)
+        if (url.pathname === '/api/spotify/auth' && request.method === 'GET') {
+          const account = await accountFromRequest(request, env)
+          if (!account) return json({ error: 'sign in required' }, 401)
+          if (!env.SPOTIFY_CLIENT_ID) return json({ error: 'spotify client id is not configured' }, 503)
+          const state = randomToken(24)
+          const verifier = randomVerifier()
+          const challenge = await pkceChallenge(verifier)
+          const redirectUri = new URL('/api/spotify/callback', request.url).toString()
+          await env.lost_internet_catalog.prepare(
+            'DELETE FROM spotify_oauth_states WHERE expires_at < ?'
+          ).bind(Date.now()).run()
+          await env.lost_internet_catalog.prepare(
+            'INSERT INTO spotify_oauth_states (state, account_id, code_verifier, redirect_uri, created_at, expires_at) '
+            + 'VALUES (?, ?, ?, ?, ?, ?)'
+          ).bind(state, account.id, verifier, redirectUri, Date.now(), Date.now() + 10 * 60_000).run()
+          return json({ url: spotifyAuthorizeUrl({ clientId: env.SPOTIFY_CLIENT_ID, redirectUri, state, challenge }) })
+        }
+
+        if (url.pathname === '/api/spotify/callback' && request.method === 'GET') {
+          const state = clean(url.searchParams.get('state'), 80)
+          const code = clean(url.searchParams.get('code'), 300)
+          if (url.searchParams.has('error') || !state || !code) return spotifyFail()
+          const pending = await env.lost_internet_catalog.prepare(
+            'SELECT account_id, code_verifier, redirect_uri, expires_at FROM spotify_oauth_states WHERE state = ?'
+          ).bind(state).first() as {
+            account_id: string; code_verifier: string; redirect_uri: string; expires_at: number
+          } | null
+          if (!pending || pending.expires_at <= Date.now()) return spotifyFail()
+          await env.lost_internet_catalog.prepare('DELETE FROM spotify_oauth_states WHERE state = ?').bind(state).run()
+          const account = await accountFromRequest(request, env)
+          if (!account || account.id !== pending.account_id || !env.SPOTIFY_CLIENT_ID) return spotifyFail()
+          const body = new URLSearchParams({
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: pending.redirect_uri,
+            client_id: env.SPOTIFY_CLIENT_ID,
+            code_verifier: pending.code_verifier,
+          })
+          const tokenResponse = await fetch('https://accounts.spotify.com/api/token', {
+            method: 'POST',
+            headers: spotifyTokenHeaders(env),
+            body,
+          })
+          if (!tokenResponse.ok) return spotifyFail()
+          const tokenData = await tokenResponse.json() as {
+            access_token?: string; refresh_token?: string; expires_in?: number; scope?: string
+          }
+          if (!tokenData.access_token || !tokenData.refresh_token) return spotifyFail()
+          let profileId = ''
+          let displayName = ''
+          try {
+            const me = await fetch('https://api.spotify.com/v1/me', {
+              headers: { Authorization: `Bearer ${tokenData.access_token}` },
+            })
+            if (me.ok) {
+              const meData = await me.json() as { id?: string; display_name?: string }
+              profileId = clean(meData.id, 80)
+              displayName = clean(meData.display_name, 120)
+            }
+          } catch { /* profile is optional */ }
+          await env.lost_internet_catalog.prepare(
+            'INSERT INTO spotify_links (account_id, spotify_user_id, display_name, access_token, refresh_token, '
+            + 'expires_at, scope, connected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) '
+            + 'ON CONFLICT(account_id) DO UPDATE SET spotify_user_id = excluded.spotify_user_id, '
+            + 'display_name = excluded.display_name, access_token = excluded.access_token, '
+            + 'refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, '
+            + 'scope = excluded.scope, connected_at = excluded.connected_at'
+          ).bind(
+            account.id,
+            profileId,
+            displayName,
+            tokenData.access_token,
+            tokenData.refresh_token,
+            Date.now() + (tokenData.expires_in ?? 3600) * 1000,
+            clean(tokenData.scope, 300),
+            Date.now(),
+          ).run()
+          return Response.redirect(new URL('/?spotify=connected', request.url).toString(), 302)
+        }
+
+        const account = await accountFromRequest(request, env)
+        if (!account) return json({ error: 'sign in required' }, 401)
+        if (url.pathname === '/api/spotify/link' && request.method === 'GET') {
+          const row = await env.lost_internet_catalog.prepare(
+            'SELECT spotify_user_id, display_name, scope, connected_at FROM spotify_links WHERE account_id = ?'
+          ).bind(account.id).first() as {
+            spotify_user_id: string; display_name: string; scope: string; connected_at: number
+          } | null
+          return json({
+            linked: Boolean(row),
+            spotifyUserId: row?.spotify_user_id ?? '',
+            displayName: row?.display_name ?? '',
+            scope: row?.scope ?? '',
+            connectedAt: row?.connected_at ?? 0,
+          })
+        }
+        if (url.pathname === '/api/spotify/disconnect' && request.method === 'POST') {
+          await env.lost_internet_catalog.prepare('DELETE FROM spotify_links WHERE account_id = ?').bind(account.id).run()
+          return json({ ok: true })
+        }
+      }
     } catch (error) {
       console.error(error)
       return json({ error: 'account error' }, 500)
@@ -351,29 +507,50 @@ export default {
         if (!link) return json({ error: 'playlist URL is required' }, 400)
 
         if (provider === 'spotify') {
-          if (!env.SPOTIFY_CLIENT_ID || !env.SPOTIFY_CLIENT_SECRET) {
-            return json({ error: 'spotify credentials are not configured' }, 503)
-          }
           const playlistId = parseSpotifyPlaylistUrl(link)
           if (!playlistId) return json({ error: 'invalid Spotify playlist URL' }, 400)
+          const account = await accountFromRequest(request, env)
+          const linked = account
+            ? await env.lost_internet_catalog.prepare(
+              'SELECT 1 FROM spotify_links WHERE account_id = ?'
+            ).bind(account.id).first()
+            : null
+          let token: string | null = null
+          let via: 'account' | 'server' = 'server'
+          if (account && linked) {
+            token = await linkedSpotifyToken(env, account.id).catch(() => null)
+            if (!token) {
+              return json({ error: 'spotify link expired, reconnect it in account.txt' }, 503)
+            }
+            via = 'account'
+          } else if (env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET) {
+            try {
+              token = await spotifyToken(env)
+            } catch {
+              return json({ error: 'spotify authentication failed' }, 502)
+            }
+          } else {
+            return json({
+              error: account
+                ? 'connect your Spotify account in account.txt first'
+                : 'sign in and connect your Spotify account, or configure server credentials',
+            }, 503)
+          }
           const limited = await enforceIntegrationLimit(request, env)
           if (limited) return limited
-          let token: string
-          try {
-            token = await spotifyToken(env)
-          } catch {
-            return json({ error: 'spotify authentication failed' }, 502)
-          }
           const tracks: IntegrationTrack[] = []
           let next: string | null = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&fields=next,items(track(name,artists(name),album(name),duration_ms,external_urls(spotify)))`
           for (let page = 0; next && page < 5; page += 1) {
             const response = await fetch(next, { headers: { Authorization: `Bearer ${token}` } })
+            if (response.status === 401 && via === 'account') {
+              return json({ error: 'spotify link expired, reconnect it in account.txt' }, 503)
+            }
             if (!response.ok) return json({ error: 'spotify request failed', status: response.status }, 502)
             const mapped = mapSpotifyPage(await response.json())
             tracks.push(...mapped.tracks)
             next = mapped.next
           }
-          return json({ provider, tracks, count: tracks.length })
+          return json({ provider, tracks, count: tracks.length, via })
         }
 
         if (!env.YANDEX_MUSIC_TOKEN) return json({ error: 'yandex token is not configured' }, 503)

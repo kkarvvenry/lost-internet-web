@@ -26,6 +26,7 @@ Dark Webcore / Y2K локальный музыкальный плеер с по�
 - интерфейс RU / EN: переключатель в titlebar и в `SETTINGS // LANGUAGE`, выбор сохраняется вместе с остальными настройками; справка и статусы тоже переводятся;
 - привязки к внешним сервисам: кнопка `WEB` на треке открывает окно `links.txt` с поиском по Yandex Music, Spotify, YouTube Music, Bandcamp, SoundCloud и MusicBrainz; прямые ссылки сохраняются локально в метаданных трека, для публичных записей доступен только поиск; сервис по умолчанию выбирается в `SETTINGS // INTEGRATIONS`;
 - импорт плейлистов Spotify и Яндекс.Музыки в разделе NETWORK: Worker загружает только метаданные треков, приложение ищет совпадения среди локальных файлов по названию и артисту и кнопкой `ADD MATCHED` добавляет их в плейлист; аудио не скачивается и не загружается на сервер; лимит — 20 импортов с IP в сутки;
+- личная привязка Spotify для каждого аккаунта: вошедший пользователь подключает свой Spotify через OAuth PKCE в окне `account.txt`, после этого импорт его плейлистов идёт от его токена; токены хранятся в D1 привязанными к аккаунту и не требуют от пользователя ввода ключей;
 - аккаунты для всех посетителей: регистрация и вход по email/паролю через Worker, сессии в HttpOnly-cookie, пароли хранятся только как PBKDF2-хэши в D1; у каждого аккаунта свой локальный архив в IndexedDB, а настройки, плейлисты, избранное и внешние ссылки можно сохранить в аккаунт и загрузить обратно; никаких ключей от пользователя не требуется;
 - перетаскиваемые popup-окна Internet Explorer, Favorites, About, Help, links.txt; справка открывается кнопкой `?` или `H`, верхнее окно удерживает фокус внутри себя;
 - меню File / View / Playback / Help, экспорт и импорт метаданных, очистка архива;
@@ -56,7 +57,7 @@ npm run smoke # проверка живого сайта, ассетов, PWA и
 npm run verify # build + test + smoke
 ```
 
-GitHub Actions на push в `main` выполняет те же проверки и деплоит Worker. Для автодеплоя нужен repository secret с API-токеном Cloudflare: `CLOUDFLARE_API_TOKEN` (поддерживается и имя `LOST_INTERNET_CL`). Account ID задан в `wrangler.jsonc`, отдельный секрет не нужен. Без токена deploy пропускается, а не помечается как failed. Если добавлены repository secrets `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и/или `YANDEX_MUSIC_TOKEN`, workflow автоматически записывает их в Worker. Инструкция — `DEPLOY.md`.
+GitHub Actions на push в `main` выполняет те же проверки и деплоит Worker. Для автодеплоя нужен repository secret с API-токеном Cloudflare: `CLOUDFLARE_API_TOKEN` (поддерживается и имя `LOST_INTERNET_CL`). Account ID задан в `wrangler.jsonc`, отдельный секрет не нужен. Без токена deploy пропускается, а не помечается как failed. Если добавлены repository secrets `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и/или `YANDEX_MUSIC_TOKEN`, workflow автоматически записывает их в Worker. Для личной привязки Spotify достаточно `SPOTIFY_CLIENT_ID`; `SPOTIFY_CLIENT_SECRET` нужен только для общего серверного импорта. Инструкция — `DEPLOY.md`.
 
 ## Доступ для других
 
@@ -88,14 +89,15 @@ cloudflared tunnel --url http://localhost:5173
 - `src/App.tsx` — точка входа React, рендерит только `LostInternetApp`;
 - `src/components/LostInternetApp.tsx` — всё приложение;
 - `src/components/LostInternetApp.css` — стили;
-- `src/worker.ts` — Cloudflare Worker с API `/api/health`, `/api/stats`, `/api/catalog`, `/api/catalog/:id/like`, `/api/integrations/playlist`, `/api/auth/*`, `/api/user/data`;
+- `src/worker.ts` — Cloudflare Worker с API `/api/health`, `/api/stats`, `/api/catalog`, `/api/catalog/:id/like`, `/api/integrations/playlist`, `/api/auth/*`, `/api/user/data`, `/api/spotify/*`;
 - `migrations/0001_init.sql` — схема D1 для общего каталога;
 - `migrations/0002_like_hits.sql` — защита от повторных лайков с одного адреса в сутки;
 - `migrations/0003_catalog_likes_index.sql` — индекс для сортировки NETWORK по лайкам;
 - `migrations/0004_publish_hits.sql` — дневной лимит публикаций с одного адреса;
 - `migrations/0005_integration_hits.sql` — дневной лимит импорта плейлистов;
 - `migrations/0006_accounts.sql` — аккаунты, сессии, облачные данные и лимит попыток входа;
-- `src/lib/format.ts`, `src/lib/table.ts`, `src/lib/i18n.ts`, `src/lib/links.ts`, `src/lib/integrations.ts`, `src/lib/match.ts`, `src/lib/account.ts` — чистые хелперы, покрытые unit-тестами;
+- `migrations/0007_spotify_links.sql` — состояния OAuth PKCE и личные Spotify-токены, привязанные к аккаунту;
+- `src/lib/format.ts`, `src/lib/table.ts`, `src/lib/i18n.ts`, `src/lib/links.ts`, `src/lib/integrations.ts`, `src/lib/match.ts`, `src/lib/account.ts`, `src/lib/spotify.ts` — чистые хелперы, покрытые unit-тестами;
 - `scripts/smoke.mjs` — smoke-проверка публичного деплоя;
 - `.github/workflows/ci.yml` — проверки и автодеплой;
 - `wrangler.jsonc` — деплой и привязка D1;
