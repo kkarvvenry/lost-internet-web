@@ -2,6 +2,12 @@
 
 ## 2026-11-26
 
+### `1299465` — Personal Spotify account per visitor
+- В окне `account.txt` появился блок SPOTIFY: вошедший пользователь подключает свой аккаунт через OAuth Authorization Code + PKCE (`LINK SPOTIFY`), видит подключённый профиль и может отключить привязку (`DISCONNECT`). Для пользователя не требуется вводить ключи или секреты.
+- Добавлены endpoints `GET /api/spotify/auth`, `GET /api/spotify/callback`, `GET /api/spotify/link`, `POST /api/spotify/disconnect`; состояния OAuth и токены хранятся в D1 и привязаны к аккаунту, а не к браузеру.
+- Импорт плейлистов Spotify теперь сначала использует личный токен пользователя (`via: "account"`); если привязки нет, остаётся серверный Client Credentials fallback (`via: "server"`). Отозванный личный токен требует повторного подключения и не подменяется серверным.
+- Добавлена миграция `0007_spotify_links.sql`, PKCE-хелперы `src/lib/spotify.ts` с тестами, RU-строки, индикатор привязки в панели импорта и документация по redirect URI `https://lost-internet-web.stepanb249.workers.dev/api/spotify/callback`.
+
 ### `8da7ed6` — Accounts for every visitor
 - В titlebar появилась кнопка `LOGIN`/email: любой посетитель может зарегистрироваться или войти по email и паролю. Сессии живут в HttpOnly-cookie, пароли хранятся в D1 только как PBKDF2-хэши, попытки входа ограничены 15 в сутки с IP.
 - Локальный архив IndexedDB разделён по аккаунтам: у гостя и у каждого вошедшего пользователя своя база, аудиофайлы никогда не покидают устройство.
