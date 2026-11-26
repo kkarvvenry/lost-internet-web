@@ -49,6 +49,23 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Sync integration secrets to Worker
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          YANDEX_MUSIC_TOKEN: ${{ secrets.YANDEX_MUSIC_TOKEN }}
+        run: |
+          set -euo pipefail
+          sync_secret() {
+            if [ -n "$2" ]; then
+              printf '%s' "$2" | npx --yes wrangler@4.168.0 secret put "$1"
+            else
+              echo "::notice::$1 is not set in GitHub Secrets; skipping."
+            fi
+          }
+          sync_secret SPOTIFY_CLIENT_ID "$SPOTIFY_CLIENT_ID"
+          sync_secret SPOTIFY_CLIENT_SECRET "$SPOTIFY_CLIENT_SECRET"
+          sync_secret YANDEX_MUSIC_TOKEN "$YANDEX_MUSIC_TOKEN"
       - run: npm run build
       - run: npx --yes wrangler@4.168.0 deploy
       - run: npm run smoke

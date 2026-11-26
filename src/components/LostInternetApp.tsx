@@ -3,6 +3,8 @@ import { uid, fmt, fmtBytes, clamp, dbToGain, parseName } from '../lib/format'
 import { VIRTUALIZE_THRESHOLD, tableWindow } from '../lib/table'
 import { translate, type Language } from '../lib/i18n'
 import { PROVIDERS, buildSearchQuery, buildSearchUrl, isProviderId, normalizeServiceUrl, sanitizeLinks, type ProviderId, type TrackLinks } from '../lib/links'
+import { matchScore } from '../lib/match'
+import type { IntegrationProvider, IntegrationTrack } from '../lib/integrations'
 import './LostInternetApp.css'
 
 type RepeatMode = 'off' | 'all' | 'one'
@@ -374,6 +376,11 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
   const [duration, setDuration] = useState(0)
   const [popups, setPopups] = useState<Popup[]>([])
   const [linksTarget, setLinksTarget] = useState<{ id?: string; query: string } | null>(null)
+  const [importProvider, setImportProvider] = useState<IntegrationProvider>('spotify')
+  const [importUrl, setImportUrl] = useState('')
+  const [importResults, setImportResults] = useState<IntegrationTrack[]>([])
+  const [importBusy, setImportBusy] = useState(false)
+  const [importError, setImportError] = useState('')
   const [openMenu, setOpenMenu] = useState<MenuKind | null>(null)
   const [status, setStatus] = useState('Ready. Drop into the archive.')
   const [toast, setToast] = useState('')
@@ -1520,6 +1527,59 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
       setPendingLikes(prev => prev.filter(x => x !== id))
     }
   }
+  function findLocalMatch(item: IntegrationTrack): string | null {
+    let best: { id: string; score: number } | null = null
+    for (const track of tracks) {
+      const score = matchScore(item, { title: track.name, artist: track.artist })
+      if (score < 2 || (best && score <= best.score)) continue
+      best = { id: track.id, score }
+    }
+    return best?.id ?? null
+  }
+  async function importPlaylist() {
+    const url = importUrl.trim()
+    if (!url || importBusy) return
+    setImportBusy(true)
+    setImportError('')
+    setImportResults([])
+    try {
+      const response = await fetch('/api/integrations/playlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: importProvider, url }),
+      })
+      const data = (await response.json().catch(() => ({}))) as { tracks?: IntegrationTrack[]; error?: string }
+      if (!response.ok) {
+        setImportError(data.error ?? `HTTP ${response.status}`)
+        return
+      }
+      const list = Array.isArray(data.tracks) ? data.tracks : []
+      setImportResults(list)
+      if (!list.length) setImportError(tr('No tracks found in this playlist.'))
+    } catch {
+      setImportError(tr('Import service is unreachable.'))
+    } finally {
+      setImportBusy(false)
+    }
+  }
+  function addImportedMatches() {
+    const playlist = playlists.find(p => p.id === selectedPlaylistId) ?? playlists[0]
+    if (!playlist) {
+      notify(tr('Create a playlist first.'))
+      return
+    }
+    const ids: string[] = []
+    for (const item of importResults) {
+      const id = findLocalMatch(item)
+      if (id && !playlist.trackIds.includes(id) && !ids.includes(id)) ids.push(id)
+    }
+    if (!ids.length) {
+      notify(tr('No local matches found.'))
+      return
+    }
+    setPlaylists(prev => prev.map(p => p.id === playlist.id ? { ...p, trackIds: [...p.trackIds, ...ids] } : p))
+    notify(`${ids.length}${tr(' tracks added to playlist.')}`)
+  }
   function playCatalogTrack(item: CatalogTrack) {
     const title = item.title.trim().toLowerCase()
     const artist = item.artist.trim().toLowerCase()
@@ -2097,6 +2157,46 @@ export function LostInternetApp({ onExit }: { onExit?: () => void }) {
             <button className={catalogSort === 'likes' ? 'is-active' : ''} aria-pressed={catalogSort === 'likes'} onClick={() => setCatalogSort('likes')}>TOP</button>
           </div>
         </div>
+        <section className="li-import">
+          <div className="li-import__head">
+            <span>{tr('// IMPORT PLAYLIST')}</span>
+            <div className="li-segmented">
+              <button className={importProvider === 'spotify' ? 'is-active' : ''} aria-pressed={importProvider === 'spotify'} onClick={() => setImportProvider('spotify')}>SPOTIFY</button>
+              <button className={importProvider === 'yandex' ? 'is-active' : ''} aria-pressed={importProvider === 'yandex'} onClick={() => setImportProvider('yandex')}>YANDEX</button>
+            </div>
+          </div>
+          <div className="li-import__tools">
+            <input
+              className="li-input"
+              type="url"
+              inputMode="url"
+              aria-label={tr('Playlist URL')}
+              placeholder={importProvider === 'spotify' ? 'https://open.spotify.com/playlist/...' : 'https://music.yandex.ru/users/.../playlists/...'}
+              value={importUrl}
+              onChange={e => setImportUrl(e.target.value)}
+            />
+            <button className="li-btn" disabled={importBusy || !importUrl.trim()} onClick={() => { void importPlaylist() }}>{importBusy ? tr('IMPORTING...') : tr('IMPORT')}</button>
+            <button className="li-btn" disabled={!importResults.length} onClick={addImportedMatches}>{tr('ADD MATCHED')}</button>
+          </div>
+          {importError && <p className="li-import__error">{importError}</p>}
+          {Boolean(importResults.length) && (
+            <div className="li-import__list">
+              {importResults.slice(0, 100).map((item, i) => {
+                const matched = findLocalMatch(item)
+                return (
+                  <div className="li-import__row" key={`${item.title}-${i}`}>
+                    <span>{String(i + 1).padStart(2, '0')}</span>
+                    <span title={item.title}>{item.title}</span>
+                    <span title={item.artist}>{item.artist}</span>
+                    <span>{item.duration ? fmt(item.duration) : '--:--'}</span>
+                    <span className={matched ? 'is-matched' : ''}>{matched ? tr('MATCHED') : tr('NO LOCAL FILE')}</span>
+                    {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">{tr('OPEN')}</a>}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
         <p className="li-network__note">{tr("Metadata only. Audio files stay on each user's device. Publish a local track with PUB, then anyone can see it here.")}</p>
         <div className="li-network__list">
           {catalog.map((item, i) => (

@@ -1,0 +1,104 @@
+export type IntegrationProvider = 'spotify' | 'yandex'
+
+export type IntegrationTrack = {
+  title: string
+  artist: string
+  album: string
+  duration: number
+  url?: string
+}
+
+const SPOTIFY_ID = /^[A-Za-z0-9]{22}$/
+const YANDEX_HOSTS = ['music.yandex.ru', 'music.yandex.com', 'music.yandex.kz', 'music.yandex.by']
+
+function text(value: unknown, max = 180): string {
+  return String(value ?? '').trim().slice(0, max)
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null
+}
+
+export function parseSpotifyPlaylistUrl(raw: string): string | null {
+  const value = raw.trim()
+  const uri = value.match(/^spotify:playlist:([A-Za-z0-9]{22})$/)
+  if (uri) return uri[1]
+  try {
+    const url = new URL(value)
+    const host = url.hostname.toLowerCase().replace(/^www\./, '')
+    if (host !== 'open.spotify.com') return null
+    const match = url.pathname.match(/^\/playlist\/([A-Za-z0-9]{22})\/?$/)
+    return match && SPOTIFY_ID.test(match[1]) ? match[1] : null
+  } catch {
+    return null
+  }
+}
+
+export function parseYandexPlaylistUrl(raw: string): { uid: string; kind: string } | null {
+  try {
+    const url = new URL(raw.trim())
+    const host = url.hostname.toLowerCase().replace(/^www\./, '')
+    if (!YANDEX_HOSTS.includes(host)) return null
+    const full = url.pathname.match(/^\/users\/([A-Za-z0-9_-]+)\/playlists\/([A-Za-z0-9_-]+)\/?$/)
+    if (full) return { uid: full[1], kind: full[2] }
+    const short = url.pathname.match(/^\/playlists\/([A-Za-z0-9_-]+)\/?$/)
+    if (short) return { uid: 'me', kind: short[1] }
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function mapSpotifyPage(json: unknown): { next: string | null; tracks: IntegrationTrack[] } {
+  const root = record(json)
+  if (!root) return { next: null, tracks: [] }
+  const items = Array.isArray(root.items) ? root.items : []
+  const tracks: IntegrationTrack[] = []
+  for (const item of items) {
+    const wrapper = record(item)
+    const raw = record(wrapper?.track)
+    if (!raw) continue
+    const title = text(raw.name)
+    if (!title) continue
+    const artists = Array.isArray(raw.artists)
+      ? raw.artists.map(a => text(record(a)?.name, 80)).filter(Boolean)
+      : []
+    const album = record(raw.album)
+    const urls = record(raw.external_urls)
+    tracks.push({
+      title,
+      artist: artists.join(', ') || 'unknown artist',
+      album: text(album?.name, 120),
+      duration: Math.max(0, Math.round(Number(raw.duration_ms ?? 0) / 1000)),
+      url: text(urls?.spotify, 300) || undefined,
+    })
+  }
+  return { next: typeof root.next === 'string' ? root.next : null, tracks }
+}
+
+export function mapYandexPlaylist(json: unknown): IntegrationTrack[] {
+  const root = record(json)
+  if (!root) return []
+  const playlist = record(root.playlist)
+  const rawTracks = Array.isArray(root.tracks) ? root.tracks : (Array.isArray(playlist?.tracks) ? playlist.tracks : [])
+  const tracks: IntegrationTrack[] = []
+  for (const item of rawTracks) {
+    const wrapper = record(item)
+    const raw = record(wrapper?.track) ?? wrapper
+    if (!raw) continue
+    const title = text(raw.title)
+    if (!title) continue
+    const artists = Array.isArray(raw.artists)
+      ? raw.artists.map(a => text(record(a)?.name, 80)).filter(Boolean)
+      : []
+    const album = record(raw.album)
+    tracks.push({
+      title,
+      artist: artists.join(', ') || 'unknown artist',
+      album: text(album?.title, 120),
+      duration: Math.max(0, Math.round(Number(raw.durationMs ?? 0) / 1000)),
+      url: undefined,
+    })
+  }
+  return tracks
+}

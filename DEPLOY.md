@@ -25,9 +25,11 @@ https://lost-internet-web.stepanb249.workers.dev
 - `migrations/0002_like_hits.sql` добавляет таблицу `catalog_like_hits` для защиты от спама лайками;
 - `migrations/0003_catalog_likes_index.sql` добавляет индекс для быстрой сортировки по лайкам;
 - `migrations/0004_publish_hits.sql` добавляет таблицу дневного лимита публикаций (10 с IP);
-- API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`;
+- `migrations/0005_integration_hits.sql` добавляет таблицу дневного лимита импорта плейлистов (20 с IP);
+- API: `GET /api/health`, `GET /api/stats`, `GET /api/catalog?q=&sort=recent|likes`, `POST /api/catalog`, `POST /api/catalog/:id/like`, `POST /api/integrations/playlist`;
 - интерфейс переводится между RU и EN переключателем в titlebar или в `SETTINGS // LANGUAGE`, выбор сохраняется в IndexedDB;
 - привязки к Yandex Music, Spotify, YouTube Music, Bandcamp, SoundCloud и MusicBrainz работают полностью на стороне браузера: ничего дополнительно деплоить и никакие ключи не нужны;
+- импорт плейлистов Spotify/Яндекс.Музыки работает через Worker и требует секретов (см. ниже); в каталог и в IndexedDB попадают только метаданные треков;
 - `.env` исключён из git;
 - репозиторий создан, код запушен в `main`;
 - сайт уже задеплоен и отвечает `200`.
@@ -68,6 +70,37 @@ Workflow `.github/workflows/ci.yml` на каждый push в `main` снача�
 2. `CLOUDFLARE_API_TOKEN` — API token с правами **Edit** на **Workers Scripts** и **D1** для аккаунта Cloudflare. Если секрет уже создан как `LOST_INTERNET_CL`, переименовывать не обязательно: workflow принимает и это имя.
 3. Account ID записан в `wrangler.jsonc` (`bdf7de56ab499f657fbe798c44d4ce0f`), поэтому отдельный `CLOUDFLARE_ACCOUNT_ID` не требуется.
 4. После сохранения сделай `git push` или нажми **Run workflow** во вкладке Actions — задача `deploy` перестанет пропускаться.
+
+### Импорт плейлистов Spotify и Яндекс.Музыки
+
+Миграция уже применена к рабочей базе. Если поднимаешь проект с нуля:
+
+```powershell
+npx --yes wrangler@4.168.0 d1 execute lost-internet-catalog --remote --file=migrations/0005_integration_hits.sql
+```
+
+Endpoint `POST /api/integrations/playlist` принимает `{ "provider": "spotify" | "yandex", "url": "..." }` и возвращает только список треков (название, артист, альбом, длительность, ссылка). Аудио не скачивается. Лимит — 20 запросов с IP в сутки.
+
+Без секретов endpoint отвечает `503` с понятным сообщением; остальной сайт работает нормально. Значения ключей вводятся только в GitHub Secrets или в терминал — не в чат и не в файлы репозитория.
+
+Добавь нужные repository secrets в **Settings → Secrets and variables → Actions**:
+
+- `SPOTIFY_CLIENT_ID` и `SPOTIFY_CLIENT_SECRET` — приложение в Spotify Developer Dashboard; обе переменные нужны вместе, иначе импорт Spotify останется недоступен;
+- `YANDEX_MUSIC_TOKEN` — OAuth-токен Яндекс.Музыки для импорта плейлистов.
+
+Workflow при деплое сам вызовет `wrangler secret put` для каждого заданного секрета. Если секрет не задан, шаг просто пропускается. Для ручной записи в Worker:
+
+```powershell
+npx --yes wrangler@4.168.0 secret put SPOTIFY_CLIENT_ID
+npx --yes wrangler@4.168.0 secret put SPOTIFY_CLIENT_SECRET
+npx --yes wrangler@4.168.0 secret put YANDEX_MUSIC_TOKEN
+```
+
+Каждая команда запросит значение с клавиатуры. После изменения секретов повторный deploy не требуется — новые значения подхватываются сразу. Проверить ответ без ключей можно так:
+
+```powershell
+Invoke-RestMethod -Uri 'https://lost-internet-web.stepanb249.workers.dev/api/integrations/playlist' -Method Post -ContentType 'application/json' -Body '{"provider":"spotify","url":"https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"}'
+```
 
 Проверить токен локально можно так:
 

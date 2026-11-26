@@ -95,6 +95,20 @@ export const UI_RU: Record<string, string> = {
   'NEW BUILD READY // RELOAD TO APPLY': 'НОВАЯ СБОРКА ГОТОВА // ПЕРЕЗАГРУЗИТЕСЬ',
   RELOAD: 'ПЕРЕЗАГРУЗИТЬ',
 
+  // playlist import
+  '// IMPORT PLAYLIST': '// ИМПОРТ ПЛЕЙЛИСТА',
+  'Playlist URL': 'Ссылка на плейлист',
+  IMPORT: 'ИМПОРТ',
+  'IMPORTING...': 'ИМПОРТ...',
+  'ADD MATCHED': 'ДОБАВИТЬ СОВПАДЕНИЯ',
+  MATCHED: 'НАЙДЕН',
+  'NO LOCAL FILE': 'НЕТ ЛОКАЛЬНОГО ФАЙЛА',
+  'No tracks found in this playlist.': 'В этом плейлисте нет треков.',
+  'Import service is unreachable.': 'Сервис импорта недоступен.',
+  'Create a playlist first.': 'Сначала создайте плейлист.',
+  'No local matches found.': 'Совпадений в локальном архиве нет.',
+  ' tracks added to playlist.': ' треков добавлено в плейлист.',
+
   // public index
   '// PUBLIC INDEX': '// ПУБЛИЧНЫЙ ИНДЕКС',
   'SCANNING...': 'СКАНИРОВАНИЕ...',
