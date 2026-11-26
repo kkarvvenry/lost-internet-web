@@ -337,7 +337,7 @@ export default {
 
         if (url.pathname === '/api/spotify/callback' && request.method === 'GET') {
           const state = clean(url.searchParams.get('state'), 80)
-          const code = clean(url.searchParams.get('code'), 300)
+          const code = clean(url.searchParams.get('code'), 2048)
           if (url.searchParams.has('error') || !state || !code) return spotifyFail()
           const pending = await env.lost_internet_catalog.prepare(
             'SELECT account_id, code_verifier, redirect_uri, expires_at FROM spotify_oauth_states WHERE state = ?'
