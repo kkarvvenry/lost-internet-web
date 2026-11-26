@@ -2,11 +2,11 @@
 
 ## 2026-11-26
 
-### Spotify previews become playable tracks in the app
-- В ответе импорта Spotify добавлен `previewUrl`; для публичных плейлистов он берётся из данных embed-страницы.
-- В панели `// IMPORT PLAYLIST` появилась кнопка `IMPORT AUDIO`: она скачивает доступные 30-секундные превью `p.scdn.co` напрямую в браузер, сохраняет их как Blob в IndexedDB, добавляет в библиотеку и текущий плейлист.
-- Это не требует входа и серверных секретов; аудио по-прежнему не проходит через общий каталог. Полные версии треков Spotify через публичный API недоступны.
-- Обновлены RU-строки, README, DEPLOY и версия PWA-кэша до `lost-internet-v11`.
+### Embedded Spotify player instead of preview downloads
+- Кнопка `IMPORT AUDIO` и поле `previewUrl` удалены: приложение больше не сохраняет 30-секундные фрагменты в IndexedDB.
+- После импорта Spotify в панели `// IMPORT PLAYLIST` появляется официальный embed-плеер плейлиста: полные треки играют онлайн внутри приложения, аудио не сохраняется локально и не проходит через Worker/D1.
+- Добавлены ссылка `OPEN IN SPOTIFY`, RU-строки и стили плеера в 기존ной палитре; импорт метаданных и `ADD MATCHED` остались без изменений.
+- Обновлены README, DEPLOY и версия PWA-кэша до `lost-internet-v12`.
 
 ### `18e988a` — Spotify import works through the public playlist page
 - Worker теперь пробует Web API с личным/серверным токеном, а при `403`/другом отказе читает метаданные публичного плейлиста со страницы `open.spotify.com/embed/playlist/...`.

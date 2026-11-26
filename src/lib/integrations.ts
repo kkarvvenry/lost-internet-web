@@ -6,7 +6,6 @@ export type IntegrationTrack = {
   album: string
   duration: number
   url?: string
-  previewUrl?: string
 }
 
 const SPOTIFY_ID = /^[A-Za-z0-9]{22}$/
@@ -72,7 +71,6 @@ export function mapSpotifyPage(json: unknown): { next: string | null; tracks: In
       album: text(album?.name, 120),
       duration: Math.max(0, Math.round(Number(raw.duration_ms ?? 0) / 1000)),
       url: text(urls?.spotify, 300) || undefined,
-      previewUrl: text(raw.preview_url, 500) || undefined,
     })
   }
   return { next: typeof root.next === 'string' ? root.next : null, tracks }
@@ -83,7 +81,6 @@ type SpotifyEmbedTrack = {
   title?: unknown
   subtitle?: unknown
   duration?: unknown
-  audioPreview?: { url?: unknown }
 }
 
 export async function fetchSpotifyEmbedTracks(playlistId: string): Promise<IntegrationTrack[]> {
@@ -117,7 +114,6 @@ export async function fetchSpotifyEmbedTracks(playlistId: string): Promise<Integ
       album: '',
       duration: Math.max(0, Math.round(Number(raw.duration ?? 0) / 1000)),
       url: trackId ? `https://open.spotify.com/track/${trackId}` : undefined,
-      previewUrl: text(raw.audioPreview?.url, 500) || undefined,
     })
   }
   return tracks

@@ -1052,6 +1052,44 @@ html[data-theme='light'] ::selection {
   cursor: wait;
 }
 
+.li-import__player {
+  margin-top: 8px;
+  border: 1px solid var(--li-border);
+  background: var(--li-bg);
+  padding: 7px;
+}
+
+.li-import__player-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--li-silver);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.li-import__player-head a {
+  color: var(--li-blue);
+}
+
+.li-import__player iframe {
+  display: block;
+  width: 100%;
+  min-height: 152px;
+  border: 0;
+  background: var(--li-bg);
+}
+
+.li-import__player-note {
+  margin: 6px 0 0;
+  color: var(--li-silver);
+  font-size: 10px;
+  letter-spacing: 1px;
+  line-height: 1.4;
+}
+
 .li-import__list {
   margin-top: 7px;
   border: 1px solid var(--li-border);
@@ -1919,6 +1957,10 @@ html[data-theme='light'] ::selection {
 
   .li-import__tools {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .li-import__player-head {
+    flex-wrap: wrap;
   }
 
   .li-import__row {
