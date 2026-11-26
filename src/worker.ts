@@ -551,7 +551,11 @@ export default {
             if (response.status === 401 && via === 'account') {
               return json({ error: 'spotify link expired, reconnect it in account.txt' }, 503)
             }
-            if (!response.ok) return json({ error: 'spotify request failed', status: response.status }, 502)
+            if (!response.ok) {
+              const detail = await response.text().catch(() => '')
+              console.error({ event: 'spotify_request_failed', status: response.status, detail: detail.slice(0, 300) })
+              return json({ error: 'spotify request failed', status: response.status, detail: detail.slice(0, 200) }, 502)
+            }
             const mapped = mapSpotifyPage(await response.json())
             tracks.push(...mapped.tracks)
             next = mapped.next
